@@ -10,7 +10,7 @@
 
 > 帮我把 loop 装好。读 https://raw.githubusercontent.com/free-wyq/loop/main/install.md 按里面的步骤执行，装好后把我的密钥/代理/模型配进 ~/.config/loop.env。需要什么密钥你来问我。
 
-企业微信群机器人：在 `hermes setup`（或问 Hermes「帮我配企业微信群机器人」）里填 webhook URL，配好就能收消息。
+企业微信群机器人：把这条发给 Hermes「帮我配企业微信群机器人，我要用它收 loop 战报」——它会问你要群机器人的 webhook URL（企业微信群里建个机器人就有）。
 
 下文 `<项目>` 一律是你的项目绝对路径，如 `/home/you/work/myapp`。
 
