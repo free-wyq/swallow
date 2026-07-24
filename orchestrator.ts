@@ -783,7 +783,11 @@ async function watch(goal: string) {
 
     while (true) {
       const o = await tick();
-      if (["done", "already_terminated", "stopped"].includes(o.kind)) break;
+      // done/already_terminated/stopped/terminated 都是终态 → watch 退出。
+      // terminated 含 suspected_false_completion（remaining=0 但有阻塞/零 commit，不设 last_termination 待人工介入）——
+      // 若不退出会每 5s 重新 tick_started→suspected_false_completion→terminated 无限空转刷屏烧 token。
+      // blocked 不在退出集：单个任务阻塞但还有未完成任务时该推进下一任务，watch 继续。
+      if (["done", "already_terminated", "stopped", "terminated"].includes(o.kind)) break;
       if (o.kind === "already_running") {
         await sleep(ALREADY_RUNNING_SLEEP_MS);
         continue;
