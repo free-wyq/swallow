@@ -72,7 +72,7 @@ flowchart TB
     ENV -.->|"密钥/模型"| RUN
     RUN --> SDK
     SDK --> TICK
-    TICK -->|"★阶段A 成本立即写"| STATE
+    TICK -->|"原子写状态"| STATE
     TICK --> EVENTS
     TICK -->|"打勾 [x]/[~]"| TASK
     Ext -->|"读已落盘结果"| STATE
@@ -92,7 +92,7 @@ flowchart TB
 四个边界一图看清（虚线=读取/喂入，实线=主推进流）：
 - ⚙️ **主机配置（黄框）**——`~/.config/loop.env` 是 Linux/macOS 主机路径（XDG 约定），存密钥 + 代理/模型。不属项目、不属脚本：脚本启动时读进 env，已 export 的不覆盖。限额写死在脚本（见橙框），不在这。
 - 📁 **项目边界（绿框）**——`--cwd` 指向的目标项目：已有知识（CLAUDE.md/memory）+ 全部产物（.task.md/state.json/events.jsonl）都落在它目录里，git commit 进它仓库。
-- 🛠️ **脚本边界（橙框）**——loop orchestrator 本体（`orchestrator.ts` 的 `--watch` 进程）：bootstrap 拆解 + tick 执行是两个独立 `query()`。**限额写死在脚本顶部常量**（token 不限量，预算/轮数护栏纯属挡路 → 一律 0=不限；行为护栏留正数防死循环），不读 loop.env；loop.env 只喂密钥/代理/模型。
+- 🛠️ **脚本边界（橙框）**——loop orchestrator 本体（`orchestrator.ts` 的 `--watch` 进程）：bootstrap 拆解 + tick 执行是两个独立 `query()`。**限额写死在脚本顶部常量**（token 不限量，轮数护栏纯属挡路 → 一律 0=不限；行为护栏留正数防死循环），不读 loop.env；loop.env 只喂密钥/代理/模型。
 - 📡 **外部 agent 边界（蓝框）**——脚本之外的角色（用户 / claw 等）：**拉起** `--watch` 启动推进，另起定时**读已落盘结果**自行组织发战报。与脚本互不依赖（任一方挂了不影响另一方）。
 
 ### tick() 控制流（崩溃恢复核心，watch 内部循环调用）
@@ -103,8 +103,7 @@ flowchart TD
     Lock --> Check{"已停 / 已完成?"}
     Check -->|是| Exit([直接退出])
     Check -->|否| Run["读任务 → runOneTask<br/>query+hook+看门狗"]
-    Run --> PhaseA["★阶段A<br/>成本立即写 state.json"]
-    PhaseA --> Judge{"结果?"}
+    Run --> Judge{"结果?"}
     Judge -->|崩溃/超时| Drop["弃会话重试<br/>连续3次标阻塞"]
     Judge -->|真改动| Adv["打勾+commit<br/>reset 计数"]
     Judge -->|空转| Stall["空转计数<br/>满3标阻塞"]
@@ -113,7 +112,6 @@ flowchart TD
     Stall --> Write
     Write --> Release(["释放锁"])
 
-    style PhaseA fill:#fff3e0
     style Run fill:#e3f2fd
 ```
 
@@ -129,12 +127,11 @@ sequenceDiagram
     W->>E: tick_started (tick_id=A)
     W->>S: status=running, loop_count=N
     Note over W: runOneTask 执行中...
-    W->>S: ★阶段A 成本已落盘
     Note over W: 💀 kill -9 进程被强杀
     Note over E: tick_started(A) 无配对 tick_completed<br/>= 该 tick 崩溃（可检测）
 
     Note over T: 60s 后锁 stale 自动 takeover
-    T->>S: 读 state.json（loop_count=N, 成本已含本轮）
+    T->>S: 读 state.json（loop_count=N）
     T->>E: 读到 tick_started(A) 无配对
     T->>E: tick_started (tick_id=B)
     Note over T: 从崩溃处续跑同任务<br/>loop_count=N+1<br/>state 不丢 / 不重复打勾
@@ -166,7 +163,7 @@ cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥�
 | `ANTHROPIC_BASE_URL` | 代理才填 | 走代理/中转才填 |
 | `ANTHROPIC_MODEL` 等 | 代理才填 | 走代理时指定模型名 |
 
-**限额不在这里**——写死在 `orchestrator.ts` 顶部常量（token 不限量场景下预算/轮数护栏纯属挡路，一律 `0 = 不限`；行为护栏 `STALL_LIMIT=3` / `ABORT_TIMEOUT_MIN=60` / `SESSION_RETRY_LIMIT=3` 留正数防死循环）。要改改代码，不读 loop.env。详见 [install.md](install.md)。
+**限额不在这里**——写死在 `orchestrator.ts` 顶部常量（token 不限量场景下轮数护栏纯属挡路，一律 `0 = 不限`；行为护栏 `STALL_LIMIT=3` / `ABORT_TIMEOUT_MIN=60` / `SESSION_RETRY_LIMIT=3` 留正数防死循环）。要改改代码，不读 loop.env。详见 [install.md](install.md)。
 
 ## 命令一览
 
@@ -188,7 +185,7 @@ cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥�
 ## 推进 + 结构化结果 + 外部发战报
 
 - **推进**：`--watch` 长进程，一次拉起自驱跑到完成。内部是幂等 `tick()`（bootstrap 拆任务 → `while(tick())`，每轮 commit），崩了重启续跑。推进不依赖外部触发。
-- **结果落盘**：每轮把进度/成本/状态结构化写进 `state.json`（恢复点，原子写）+ `events.jsonl`（append-only 审计流）。`.task.md` 是进度真相源。
+- **结果落盘**：每轮把进度/状态结构化写进 `state.json`（恢复点，原子写）+ `events.jsonl`（append-only 审计流）。`.task.md` 是进度真相源。
 - **战报**：orchestrator **不发**。由外部 agent 定时读 state/events/.task.md 这些结构化结果，自行组织文案发战报。文案、频道、频率全由 agent 定。
 
 三者解耦：推进靠 `--watch` 自管，结果可靠落盘，战报由外部 agent 读结果自行组织。watch 挂了不影响外部 agent 读已落盘的结果发战报；外部 agent 挂了不影响 watch 推进。
@@ -226,7 +223,6 @@ loop 升级后重跑上述命令刷新 skill 内容。详见 [install.md](instal
 |---|---|---|
 | 原子写 | `write-file-atomic`（data fsync + dir fsync） | state.json/.task.md 写一半被 kill 截断 |
 | 进程级锁 | `proper-lockfile`（stale 60s 自动 takeover） | 多 watch / 手动与 watch 并发冲突；kill -9 残留锁 |
-| **阶段A 财务保护** | runOneTask 返回立即写成本，在打勾/commit 之前 | 崩溃丢钱、预算守卫漏算超支 |
 | 假完成三重校验 | 零改动不打勾 + 连续 3 次空转标阻塞 + 全程零 commit 不退出 | agent 空退/假完成 |
 | ctx-overflow 重试 | 结构化判定（subtype+errors）+ 弃会话重开，连续 3 次标阻塞 | 上下文撑爆死循环 |
 | 崩溃检测 | tick_started 与 tick_completed 配对（同 tick_id） | 发现未完成的崩溃 tick |
@@ -235,7 +231,7 @@ loop 升级后重跑上述命令刷新 skill 内容。详见 [install.md](instal
 
 | 文件 | 作用 |
 |---|---|
-| `state.json` | 机器读恢复点（原子写）：成本/轮次/空转/commit/终止标记 |
+| `state.json` | 机器读恢复点（原子写）：轮次/空转/commit/终止标记 |
 | `events.jsonl` | append-only 审计流，`--status`/`--report` 从它读 |
 | `.task.md` | 任务列表 + 勾选状态（`[ ]`/`[x]`/`[~]`）——进度真相源 |
 | `.session_id` | Claude 会话 ID（单源，不进 state.json） |
@@ -269,7 +265,7 @@ loop 升级后重跑上述命令刷新 skill 内容。详见 [install.md](instal
 - `PostToolUse` hook 实时捕获真实文件写入 → 完成判定看真实事件（不靠 `git diff` 猜）
 - `abortController` + `Stop` hook 刷新心跳 → 看门狗事件驱动，不轮询
 - `disallowedTools` 移除 `EnterPlanMode`/`ExitPlanMode`/`AskUserQuestion`（防卡住）
-- 预算/轮数护栏写死在脚本常量、默认全 `0 = 不限`（token 不限量场景护栏纯属挡路）；loop.env 只管密钥/代理/模型
+- 轮数护栏写死在脚本常量、默认 `0 = 不限`（token 不限量场景护栏纯属挡路）；loop.env 只管密钥/代理/模型
 - 会话策略：首轮新会话、后续 resume、**永不 continue**（防旧会话污染）
 - 每轮自动 commit（本地不 push），带 Co-Authored-By trailer
 - 日志用本地时间（跟随系统时区 / `TZ`），不再 `toISOString()` 输出 UTC

@@ -81,14 +81,11 @@ const LOCK_FILE = ".tick.lock";          // flock 进程级并发保护（防多
 // 限额写死（不读环境变量）：token 不限量场景下，预算/轮数护栏纯属挡路 → 一律 0=不限。
 // 行为护栏留正数防死循环（空转/超时/重试）。要改改这里的常量，不必改 loop.env。
 const MAX_TURNS_PER_TASK = UNLIMITED;        // 单任务 agentic 轮上限；0=不限（token 不限量）
-const MAX_BUDGET_PER_TASK = UNLIMITED;       // 单任务美元上限；0=不限（无按量计费时护栏纯属挡路）
-const MAX_BUDGET_TOTAL = UNLIMITED;          // 全程美元上限；0=不限
 const STALL_LIMIT = 3;                       // 同任务连续零改动 N 次标阻塞
 const ABORT_TIMEOUT_MIN = 60;                // 单任务超 N 分钟无进展则 abort 重试
 const SESSION_RETRY_LIMIT = 3;               // 陷阱7：当前任务连续 session_dropped N 次标阻塞（防 ctx-overflow 死循环）
 // bootstrap 同样不限。拆解是大目标，限额易崩成拆解失败。
 const BOOTSTRAP_MAX_TURNS = UNLIMITED;
-const BOOTSTRAP_MAX_BUDGET = UNLIMITED;
 const WATCH_SLEEP_MS = 5_000;       // --watch tick 间隔
 const ALREADY_RUNNING_SLEEP_MS = 30_000; // 拿不到锁时的退避
 const LOCK_STALE_MS = 60_000;        // 锁 stale 阈值：proper-lockfile 自动检测并 takeover（进程 kill -9 后 60s 可被抢）
@@ -110,9 +107,6 @@ const now = () => {
   return `${t.y}-${t.mo}-${t.da} ${t.h}:${t.mi}:${t.s}`;
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-// roundCost: 保留 6 位小数，防浮点累计误差
-const roundCost = (n: number): number => Math.round((n + Number.EPSILON) * 1e6) / 1e6;
 
 function log(msg: string) {
   const line = `[${now()}] ${msg}`;
@@ -257,7 +251,7 @@ function buildPrompt(taskLine: string): string {
 - 本轮结束直接结束，不要输出总结。`;
 }
 
-async function runOneTask(taskLine: string, sessionId: string | null, costSoFar: number): Promise<RoundOutcome> {
+async function runOneTask(taskLine: string, sessionId: string | null): Promise<RoundOutcome> {
   const ac = new AbortController();
   const wroteFiles: string[] = [];
   let toolCalls = 0;
@@ -276,25 +270,11 @@ async function runOneTask(taskLine: string, sessionId: string | null, costSoFar:
   };
   startWatchdog();
 
-  // 单任务预算护栏：0 = 不限（自托管/免费代理模型按量计费无意义，设了反而崩成 blocked）。
-  // - 两者都 0：不传 maxBudgetUsd（SDK 无上限）
-  // - 只单任务设：用单任务上限
-  // - 只全程设：用全程剩余额度
-  // - 都设：取两者较小（单任务不超过全程剩余）
-  let taskBudgetCap: number | undefined;
-  if (hasLimit(MAX_BUDGET_PER_TASK) && hasLimit(MAX_BUDGET_TOTAL)) {
-    taskBudgetCap = Math.min(MAX_BUDGET_PER_TASK, Math.max(0, MAX_BUDGET_TOTAL - costSoFar));
-  } else if (hasLimit(MAX_BUDGET_PER_TASK)) {
-    taskBudgetCap = MAX_BUDGET_PER_TASK;
-  } else if (hasLimit(MAX_BUDGET_TOTAL)) {
-    taskBudgetCap = Math.max(0, MAX_BUDGET_TOTAL - costSoFar);
-  }
   const options: Parameters<typeof query>[0]["options"] = {
     abortController: ac,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     maxTurns: hasLimit(MAX_TURNS_PER_TASK) ? MAX_TURNS_PER_TASK : undefined,
-    ...(taskBudgetCap !== undefined ? { maxBudgetUsd: taskBudgetCap } : {}),
     disallowedTools: ["EnterPlanMode", "ExitPlanMode", "AskUserQuestion"],
     hooks: {
       // PostToolUse 实时捕获真实改动 —— 取代 git diff 猜测
@@ -348,7 +328,6 @@ async function runOneTask(taskLine: string, sessionId: string | null, costSoFar:
 interface StateJson {
   version: number;
   goal: string;
-  total_cost_usd: number;
   loop_count: number;
   stall_task: string | null;       // taskLine.slice(0,120)，null=无空转
   stall_count: number;              // stall_task 连续空转次数，满 STALL_LIMIT 标阻塞
@@ -357,13 +336,12 @@ interface StateJson {
   status: string;
   last_tick_at: string | null;
   last_tick_id: string | null;
-  last_termination: { reason: "done" | "budget_exceeded"; ts: string } | null; // 陷阱4：防完成后续 cron 刷 done
+  last_termination: { reason: "done"; ts: string } | null; // 陷阱4：防完成后续 cron 刷 done
 }
 
 const DEFAULT_STATE: StateJson = {
   version: 1,
   goal: "",
-  total_cost_usd: 0,
   loop_count: 0,
   stall_task: null,
   stall_count: 0,
@@ -375,7 +353,7 @@ const DEFAULT_STATE: StateJson = {
   last_termination: null,
 };
 
-// 陷阱1: 原子写 state.json（write-file-atomic：data fsync + dir fsync，崩溃后元数据不丢，财务/进度数据不可丢）
+// 陷阱1: 原子写 state.json（write-file-atomic：data fsync + dir fsync，崩溃后元数据不丢，进度数据不可丢）
 function writeStateJsonAtomic(s: StateJson) {
   writeAtomic(STATE_FILE, JSON.stringify(s, null, 2) + "\n");
 }
@@ -559,8 +537,8 @@ async function tick(): Promise<TickOutcome> {
         appendEvent("tick_completed", { outcome: "terminated" }, { tick_id: tickId, loop_count: state.loop_count });
         return { kind: "terminated" };
       }
-      log(`✅ 全部完成！共 ${total} 个任务，总花费 $${state.total_cost_usd.toFixed(4)}`);
-      appendEvent("done", { total, total_cost_usd: state.total_cost_usd }, { tick_id: tickId, loop_count: state.loop_count });
+      log(`✅ 全部完成！共 ${total} 个任务`);
+      appendEvent("done", { total }, { tick_id: tickId, loop_count: state.loop_count });
       state.last_termination = { reason: "done", ts: now() };
       state.status = "completed";
       state.last_tick_at = now();
@@ -575,19 +553,6 @@ async function tick(): Promise<TickOutcome> {
       log("⚠️ remaining>0 但找不到未完成任务行，.task.md 数据不一致");
       appendEvent("tick_skipped", { reason: "task_line_missing_with_remaining", remaining }, { tick_id: tickId, loop_count: state.loop_count });
       return { kind: "stalled" };
-    }
-
-    // 步骤7: 终止判定 B: total_cost >= MAX_BUDGET_TOTAL（0=不限，跳过）
-    if (hasLimit(MAX_BUDGET_TOTAL) && state.total_cost_usd >= MAX_BUDGET_TOTAL) {
-      log(`🛑 达到全程预算上限 $${MAX_BUDGET_TOTAL}，停止`);
-      appendEvent("budget_exceeded", { total_cost_usd: state.total_cost_usd, limit: MAX_BUDGET_TOTAL }, { tick_id: tickId, loop_count: state.loop_count });
-      state.last_termination = { reason: "budget_exceeded", ts: now() };
-      state.status = "budget_exceeded";
-      state.last_tick_at = now();
-      state.last_tick_id = tickId;
-      writeStateJsonAtomic(state);
-      appendEvent("tick_completed", { outcome: "terminated" }, { tick_id: tickId, loop_count: state.loop_count });
-      return { kind: "terminated" };
     }
 
     // 步骤8: 陷阱5 stallTask 跨 tick reset
@@ -615,16 +580,9 @@ async function tick(): Promise<TickOutcome> {
     }
 
     // 步骤11: runOneTask（核心不变：query + PostToolUse hook + 看门狗）
-    const { result, wroteFiles, toolCalls, aborted } = await runOneTask(taskLine, sessionId, state.total_cost_usd);
+    const { result, wroteFiles, toolCalls, aborted } = await runOneTask(taskLine, sessionId);
 
-    // ★步骤12 阶段A: total_cost_usd += roundCost 并原子写 state.json
-    // （财务数据不可丢，在 tickFirst/commit 之前落盘——崩溃恢复时 cost 仍正确）
-    const tickCost = result?.total_cost_usd ?? 0;
-    state.total_cost_usd = roundCost(state.total_cost_usd + tickCost);
-    writeStateJsonAtomic(state);
-    appendEvent("cost_accrued", { tick_cost: roundCost(tickCost), total_cost_usd: state.total_cost_usd }, { tick_id: tickId, loop_count: state.loop_count });
-
-    // 步骤13: session_id 更新（新会话 → session_created）
+    // 步骤12: session_id 更新（新会话 → session_created）
     if (result?.session_id && result.session_id !== sessionId) {
       sessionId = result.session_id;
       writeSessionId(sessionId);
@@ -645,7 +603,6 @@ async function tick(): Promise<TickOutcome> {
       result?.subtype === "error_during_execution" &&
       (result.errors?.some((e) => /context|exceed|too long/i.test(e))
         || /context/i.test(result.stop_reason ?? ""));
-    const isTaskBudgetExhausted = result?.subtype === "error_max_budget_usd";
 
     if (aborted || isCtxOverflow) {
       // 陷阱7: session_retries 防 ctx-overflow 死循环（连续 N 次弃会话标阻塞）
@@ -665,25 +622,8 @@ async function tick(): Promise<TickOutcome> {
         state.stall_count = 0;
       }
       state.status = "ctx_overflow_retry";
-      const { remaining: newRem } = readTasks();
       appendEvent("tick_completed", { outcome: "session_dropped" }, { tick_id: tickId, loop_count: state.loop_count });
       return { kind: "session_dropped" };
-    }
-
-    if (isTaskBudgetExhausted) {
-      // 单任务预算耗尽 ≠ ctx overflow，标阻塞但不弃会话
-      log(`💸 单任务预算耗尽（error_max_budget_usd），标 [~] 阻塞跳过（保留会话）`);
-      blockFirst();
-      appendEvent("task_blocked", { task: taskKey, reason: "task_budget_exhausted" }, { tick_id: tickId, loop_count: state.loop_count });
-      state.session_retries = 0;
-      state.stall_task = null;
-      state.stall_count = 0;
-      state.status = "idle";
-      state.last_tick_at = now();
-      writeStateJsonAtomic(state);
-      const { remaining: newRem } = readTasks();
-      appendEvent("tick_completed", { outcome: "blocked" }, { tick_id: tickId, loop_count: state.loop_count });
-      return { kind: "blocked" };
     }
 
     // 步骤15: didRealWork 判定（看 PostToolUse hook 捕获的真实写入，不是 git diff 猜测）
@@ -692,7 +632,7 @@ async function tick(): Promise<TickOutcome> {
       tickFirst();
       const committed = gitCommitIfChanged(taskLine);
       if (committed) state.had_any_commit = true;
-      log(`⏱️ 第 ${state.loop_count} 轮结束：写入 ${wroteFiles.length} 文件 / ${toolCalls} 工具调用 / $${tickCost.toFixed(4)}（${committed ? "已提交" : "无暂存"}）`);
+      log(`⏱️ 第 ${state.loop_count} 轮结束：写入 ${wroteFiles.length} 文件 / ${toolCalls} 工具调用（${committed ? "已提交" : "无暂存"}）`);
       state.stall_task = null;
       state.stall_count = 0;
       state.session_retries = 0;
@@ -728,7 +668,7 @@ async function tick(): Promise<TickOutcome> {
 // ---------------- watch()：自驱循环 ----------------
 
 // 自驱场景：bootstrap + while(tick())，保留长进程语义给命令行直跑。
-// 终止类 outcome（done/budget_exceeded/already_terminated/stopped）break；
+// 终止类 outcome（done/already_terminated/stopped）break；
 // already_running 退避 30s；其余退避 5s。
 async function watch(goal: string) {
   writeFileSync(PID_FILE, String(process.pid));
@@ -749,7 +689,7 @@ async function watch(goal: string) {
 
     while (true) {
       const o = await tick();
-      if (["done", "budget_exceeded", "already_terminated", "stopped"].includes(o.kind)) break;
+      if (["done", "already_terminated", "stopped"].includes(o.kind)) break;
       if (o.kind === "already_running") {
         await sleep(ALREADY_RUNNING_SLEEP_MS);
         continue;
@@ -849,7 +789,6 @@ ${knowledge}
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       maxTurns: hasLimit(BOOTSTRAP_MAX_TURNS) ? BOOTSTRAP_MAX_TURNS : undefined,
-      ...(hasLimit(BOOTSTRAP_MAX_BUDGET) ? { maxBudgetUsd: BOOTSTRAP_MAX_BUDGET } : {}),
       // 不禁文件工具：CLAUDE.md/memory 当基线喂进来了，剩下按需探索。无脑全扫才爆上下文，按需探索不会。
       disallowedTools: ["EnterPlanMode", "ExitPlanMode", "AskUserQuestion"],
     },
@@ -900,7 +839,6 @@ function showStatus() {
   console.log(`status: ${s.status}`);
   console.log(`goal: ${s.goal || "(未设置)"}`);
   console.log(`loop_count: ${s.loop_count}`);
-  console.log(`total_cost_usd: ${s.total_cost_usd.toFixed(4)} / ${hasLimit(MAX_BUDGET_TOTAL) ? `$${MAX_BUDGET_TOTAL}` : "不限"}`);
   console.log(`remaining: ${remaining} / ${total}`);
   console.log(`completed: ${total - remaining}`);
   console.log(`had_any_commit: ${s.had_any_commit}`);
@@ -936,7 +874,6 @@ function showReport() {
   const { total, remaining } = readTasks();
   console.log(`任务进度: ${total - remaining} / ${total} 已完成`);
   console.log(`loop_count: ${s.loop_count}`);
-  console.log(`total_cost_usd: $${s.total_cost_usd.toFixed(4)} / ${hasLimit(MAX_BUDGET_TOTAL) ? `$${MAX_BUDGET_TOTAL}` : "不限"}`);
   console.log(`status: ${s.status}`);
   if (s.last_termination) console.log(`终止: ${s.last_termination.reason} @ ${s.last_termination.ts}`);
 

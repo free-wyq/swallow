@@ -21,7 +21,7 @@ flowchart TB
     User([用户/agent 拉起])
     User -->|"--watch 自驱"| BOOT[bootstrap 拆任务 → .task.md]
     BOOT --> TICK["tick 幂等单步<br/>while 循环"]
-    TICK -->|"★成本立即写"| STATE[("state.json<br/>原子写 · 恢复点")]
+    TICK --> STATE[("state.json<br/>原子写 · 恢复点")]
     TICK --> EVENTS[("events.jsonl<br/>append-only 审计")]
     TICK --> TASK[(".task.md<br/>进度真相源")]
     Ext([外部 agent])
@@ -39,16 +39,15 @@ flowchart TB
 {
   "version": 1,
   "goal": "构建一个 Go REST API",
-  "total_cost_usd": 12.3456,
   "loop_count": 15,
   "stall_task": null,            // 当前空转任务，null=无
   "stall_count": 0,              // 连续空转次数，满 STALL_LIMIT(3) 标阻塞
   "had_any_commit": true,        // 防假完成守卫
   "session_retries": 0,          // 当前任务连续 ctx 撑爆次数，满3标阻塞
-  "status": "idle",              // idle/running/blocked_suspect/completed/budget_exceeded/ctx_overflow_retry
+  "status": "idle",              // idle/running/blocked_suspect/completed/ctx_overflow_retry
   "last_tick_at": "2026-07-24 14:00:00",
   "last_tick_id": "20260724-140000-a1b2",
-  "last_termination": null       // {reason:"done"|"budget_exceeded", ts} | null
+  "last_termination": null       // {reason:"done", ts} | null
 }
 ```
 
@@ -57,7 +56,6 @@ flowchart TB
 - `idle` — 空闲（tick 之间）
 - `completed` — 全部完成
 - `blocked_suspect` — 疑假完成，需人工介入
-- `budget_exceeded` — 预算耗尽
 - `ctx_overflow_retry` — 撞上下文重试中（未达上限）
 
 ### events.jsonl（append-only 审计流，每行一个事件）
@@ -66,7 +64,7 @@ flowchart TB
 {"ts":"...","type":"task_completed","tick_id":"...","loop_count":15,"data":{"task":"...","committed":true}}
 ```
 
-事件类型：`tick_started` / `tick_completed` / `task_completed` / `task_stall` / `task_blocked` / `session_dropped` / `aborted` / `done` / `budget_exceeded` / `suspected_false_completion` / `bootstrap_completed` / `cost_accrued` / `session_created` / `session_resumed` / `tick_skipped` / `tick_locked`。
+事件类型：`tick_started` / `tick_completed` / `task_completed` / `task_stall` / `task_blocked` / `session_dropped` / `aborted` / `done` / `suspected_false_completion` / `bootstrap_completed` / `session_created` / `session_resumed` / `tick_skipped` / `tick_locked`。
 
 **崩溃检测**：`tick_started` 无同 `tick_id` 的 `tick_completed` = 该 tick 崩溃。
 
@@ -90,7 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/free-wyq/loop/main/install.sh | bas
 loop --cwd /path/to/project "构建一个 Go REST API"
 ```
 
-`--watch` 自驱：bootstrap 拆任务 → `while(tick())` 推进 → 每轮 commit。崩了重启 `loop --cwd <proj>` 续跑（state.json 接着上次的 loop_count/cost）。
+`--watch` 自驱：bootstrap 拆任务 → `while(tick())` 推进 → 每轮 commit。崩了重启 `loop --cwd <proj>` 续跑（state.json 接着上次的 loop_count）。
 
 ⚠️ 目标项目绝不能是 loop 仓库自身——会污染 git 历史。
 
@@ -144,7 +142,7 @@ cp ~/.local/share/loop/loop.env.example ~/.config/loop.env && chmod 600 ~/.confi
 ## 崩溃恢复（自动，无需人工）
 
 `--watch` 内部是幂等 `tick()`。某轮被杀（重启 / kill -9）：
-- `state.json` 原子写未截断；成本在「阶段A」已落盘（不丢钱）
+- `state.json` 原子写未截断（恢复点不丢）
 - `events.jsonl` 里该 `tick_started` 无配对 `tick_completed` = 崩溃可检测
 - 进程级锁 `.tick.lock` 60s 后 stale 自动 takeover
 - 重启 `loop --cwd <proj>` 从崩溃处续跑，`loop_count` 不丢、不重复打勾

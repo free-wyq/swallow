@@ -59,20 +59,17 @@ chmod 600 ~/.config/loop.env   # 密钥别让别的用户读到
 
 ## 限额（写死在脚本，不读 loop.env）
 
-当前大背景 token 不限量（自托管/免费代理模型无按量计费），预算/轮数护栏纯属挡路——所以**限额写死在 `orchestrator.ts` 顶部常量**，不读 loop.env。
+当前大背景 token 不限量（自托管/免费代理模型无按量计费），轮数/预算护栏纯属挡路——所以**限额写死在 `orchestrator.ts` 顶部常量**，不读 loop.env。
 
 | 常量 | 值 | 含义 |
 |---|---|---|
 | `MAX_TURNS_PER_TASK` | 0（不限） | 单任务最大轮数 |
-| `MAX_BUDGET_PER_TASK` | 0（不限） | 单任务美元上限 |
-| `MAX_BUDGET_TOTAL` | 0（不限） | 全程美元上限 |
 | `BOOTSTRAP_MAX_TURNS` | 0（不限） | bootstrap（任务拆解）最大轮数 |
-| `BOOTSTRAP_MAX_BUDGET` | 0（不限） | bootstrap 美元上限 |
 | `STALL_LIMIT` | 3 | 同任务连续零改动 N 次标阻塞 |
 | `ABORT_TIMEOUT_MIN` | 60 | 单任务超 N 分钟无进展则 abort 重试 |
 | `SESSION_RETRY_LIMIT` | 3 | 当前任务连续 ctx 撑爆 N 次标阻塞 |
 
-要改限额改 `orchestrator.ts` 顶部这几行（`0=不限`，`hasLimit(n)=n>0` 自洽），不用动 loop.env。行为护栏（后三个）留正数防死循环。
+要改限额改 `orchestrator.ts` 顶部这几行（`0=不限`，`hasLimit(n)=n>0` 自洽），不用动 loop.env。行为护栏（后三个）留正数防死循环。预算护栏已随成本追踪一并移除（token 不限量场景下无意义）。
 
 ## 可选：外部 agent 发战报 / 注册 skill
 
@@ -80,7 +77,7 @@ orchestrator 把结果结构化到 `state.json`（恢复点）+ `events.jsonl`�
 
 ```bash
 # 外部 agent 定时读结果（具体由该 agent 的定时机制实现）：
-cat /path/to/your/project/state.json          # status/loop_count/cost/last_termination 等
+cat /path/to/your/project/state.json          # status/loop_count/last_termination 等
 tail -8 /path/to/your/project/events.jsonl    # 最近事件
 ```
 
