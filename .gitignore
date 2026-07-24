@@ -2,6 +2,7 @@
 night_run.log
 state.json
 events.jsonl
+events.jsonl.[0-9]*
 .task.md
 .session_id
 .pid

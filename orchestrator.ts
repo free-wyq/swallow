@@ -20,7 +20,7 @@
 
 import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, statSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, statSync, readdirSync, renameSync } from "node:fs";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
 import { parseArgs as nodeParseArgs } from "node:util";
@@ -94,6 +94,10 @@ const CTX_RECYCLE_RATIO = 0.7;
 const WATCH_SLEEP_MS = 5_000;       // --watch tick 间隔
 const ALREADY_RUNNING_SLEEP_MS = 30_000; // 拿不到锁时的退避
 const LOCK_STALE_MS = 60_000;        // 锁 stale 阈值：proper-lockfile 自动检测并 takeover（进程 kill -9 后 60s 可被抢）
+// 可观测性：events 轮转（防 append-only 长跑涨到几百 MB）+ 心跳节流落盘（runOneTask 期间最长 60min，state.json 否则冻结）。
+const EVENTS_ROTATE_LINES = 5000;   // events.jsonl 超 N 行触发轮转（保留近期、归档旧的）。0=不轮转
+const EVENTS_ARCHIVE_KEEP = 1;      // 保留几个归档文件（events.jsonl.1, .2...）
+const HEARTBEAT_FLUSH_MS = 30_000;  // runOneTask 期间心跳落盘节流间隔（外部 agent 对比 last_heartbeat_at 判 watch 卡死）
 
 // ---------------- 工具函数 ----------------
 
@@ -292,7 +296,7 @@ function buildPrompt(taskLine: string): string {
 - 本轮结束直接结束，不要输出总结。`;
 }
 
-async function runOneTask(taskLine: string, sessionId: string | null): Promise<RoundOutcome> {
+async function runOneTask(taskLine: string, sessionId: string | null, onHeartbeat: () => void): Promise<RoundOutcome> {
   const ac = new AbortController();
   const wroteFiles: string[] = [];
   let toolCalls = 0;
@@ -323,6 +327,7 @@ async function runOneTask(taskLine: string, sessionId: string | null): Promise<R
         hooks: [async (input) => {
           lastHeartbeat = Date.now();     // 任何工具调用都刷新心跳
           startWatchdog();
+          onHeartbeat();                  // 节流落盘 last_heartbeat_at + pendingCounts（给外部 agent 看卡死）
           toolCalls++;
           if (input.hook_event_name !== "PostToolUse") return {};
           const ti = input.tool_input as Record<string, unknown> | undefined;
@@ -335,7 +340,7 @@ async function runOneTask(taskLine: string, sessionId: string | null): Promise<R
       }],
       // Stop 只用来刷新心跳（单轮靠 for-await result 决定停，不 block）
       Stop: [{
-        hooks: [async () => { lastHeartbeat = Date.now(); return {}; }],
+        hooks: [async () => { lastHeartbeat = Date.now(); onHeartbeat(); return {}; }],
       }],
     },
   };
@@ -393,6 +398,8 @@ interface StateJson {
   last_termination: { reason: "done"; ts: string } | null; // 陷阱4：防完成后续 cron 刷 done
   last_input_tokens: number | null;  // 上轮上下文占用（result.usage.input_tokens），供下轮健康度判定
   ctx_max_tokens: number | null;     // 模型上下文窗口（getContextUsage 捕获一次，稳定）
+  last_heartbeat_at: string | null;  // runOneTask 期间节流落盘的心跳（外部 agent 对比它判 watch 卡死）
+  event_counts: Record<string, number>;  // 事件累计计数（轮转丢明细不丢计数，--report 读这）
 }
 
 const DEFAULT_STATE: StateJson = {
@@ -409,6 +416,8 @@ const DEFAULT_STATE: StateJson = {
   last_termination: null,
   last_input_tokens: null,
   ctx_max_tokens: null,
+  last_heartbeat_at: null,
+  event_counts: {},
 };
 
 // 陷阱1: 原子写 state.json（write-file-atomic：data fsync + dir fsync，崩溃后元数据不丢，进度数据不可丢）
@@ -455,6 +464,10 @@ interface EventEnvelope {
 }
 
 // appendFileSync 单行 < PIPE_BUF 原子（Linux PIPE_BUF=4096，我们一行远小于）。
+// 累计计数维护在模块级 pendingCounts，由心跳 flush / tick 出口写盘合并进 state.event_counts
+// （轮转丢明细不丢计数；--report 读 state.event_counts 不再扫全文件）。
+let eventLineCount = 0;  // 当前 events.jsonl 行数缓存（轮转后归零）
+const pendingCounts: Record<string, number> = {};  // 自上次 flush 累计的事件计数
 function appendEvent(type: string, data: Record<string, unknown>, ctx?: { tick_id?: string | null; loop_count?: number | null }) {
   const env: EventEnvelope = {
     ts: now(),
@@ -464,6 +477,50 @@ function appendEvent(type: string, data: Record<string, unknown>, ctx?: { tick_i
     data,
   };
   appendFileSync(EVENTS_FILE, JSON.stringify(env) + "\n");
+  pendingCounts[type] = (pendingCounts[type] ?? 0) + 1;
+  eventLineCount++;
+  if (hasLimit(EVENTS_ROTATE_LINES) && eventLineCount >= EVENTS_ROTATE_LINES) {
+    eventLineCount = 0;
+    rotateEvents();
+  }
+}
+
+// events.jsonl 轮转：rename 滚动归档（.1→.2 删最旧、当前→.1、新建空文件）。
+// 同文件系统 rename 原子，归档文件名 events.jsonl.<n> 进 .gitignore。
+function rotateEvents() {
+  try {
+    // 删最旧归档，从高到低滚动
+    for (let i = EVENTS_ARCHIVE_KEEP; i >= 1; i--) {
+      const src = `${EVENTS_FILE}.${i}`;
+      const dst = `${EVENTS_FILE}.${i + 1}`;
+      if (i === EVENTS_ARCHIVE_KEEP) {
+        rmSync(src, { force: true });
+      } else if (existsSync(src)) {
+        renameSync(src, dst);
+      }
+    }
+    // 当前 → .1，再新建空文件
+    if (existsSync(EVENTS_FILE)) {
+      renameSync(EVENTS_FILE, `${EVENTS_FILE}.1`);
+    }
+    writeFileSync(EVENTS_FILE, "");
+    log(`📦 events.jsonl 轮转（保留 ${EVENTS_ARCHIVE_KEEP} 个归档）`);
+  } catch (e) {
+    log(`⚠️ events 轮转失败（忽略）: ${(e as Error).message}`);
+  }
+}
+
+// 把 pendingCounts 合并进 state.event_counts 并清空 pending。
+// 由心跳节流回调 + tick 出口写盘前调用（高频 appendEvent 不直接写 state，省同步 I/O）。
+function flushPendingCounts(state: StateJson) {
+  let changed = false;
+  for (const [k, v] of Object.entries(pendingCounts)) {
+    if (v <= 0) continue;
+    state.event_counts[k] = (state.event_counts[k] ?? 0) + v;
+    pendingCounts[k] = 0;
+    changed = true;
+  }
+  return changed;
 }
 
 // 读 events.jsonl 末尾 N 条（解析失败的行跳过）
@@ -478,8 +535,12 @@ function readEventsTail(n: number): EventEnvelope[] {
   return out;
 }
 
-// 统计 events.jsonl 中某类型事件数
+// 统计某类型事件数：优先读 state.event_counts（全历史累计，轮转后仍准），回退扫当前 events.jsonl（旧 state 无此字段时）。
 function countEvents(type: string): number {
+  const s = readStateJson();
+  if (Object.keys(s.event_counts ?? {}).length > 0) {
+    return s.event_counts[type] ?? 0;
+  }
   if (!existsSync(EVENTS_FILE)) return 0;
   const lines = readFileSync(EVENTS_FILE, "utf8").split("\n").filter(Boolean);
   let c = 0;
@@ -591,6 +652,7 @@ async function tick(): Promise<TickOutcome> {
         state.status = "blocked_suspect";
         state.last_tick_at = now();
         state.last_tick_id = tickId;
+        flushPendingCounts(state);
         writeStateJsonAtomic(state);
         appendEvent("tick_completed", { outcome: "terminated" }, { tick_id: tickId, loop_count: state.loop_count });
         return { kind: "terminated" };
@@ -601,6 +663,7 @@ async function tick(): Promise<TickOutcome> {
       state.status = "completed";
       state.last_tick_at = now();
       state.last_tick_id = tickId;
+      flushPendingCounts(state);
       writeStateJsonAtomic(state);
       appendEvent("tick_completed", { outcome: "terminated" }, { tick_id: tickId, loop_count: state.loop_count });
       return { kind: "terminated" };
@@ -665,7 +728,18 @@ async function tick(): Promise<TickOutcome> {
     }
 
     // 步骤11: runOneTask（核心不变：query + PostToolUse hook + 看门狗）
-    const { result, wroteFiles, toolCalls, aborted, maxTokens } = await runOneTask(taskLine, sessionId);
+    // 心跳节流回调：runOneTask 期间最长 60min，否则 state.json 冻结在 tick 入口；
+    // 节流每 HEARTBEAT_FLUSH_MS 落盘一次 last_heartbeat_at + flush pendingCounts，外部 agent 据此判 watch 卡死。
+    let lastHeartbeatFlush = 0;
+    const onHeartbeat = () => {
+      const t = Date.now();
+      if (t - lastHeartbeatFlush < HEARTBEAT_FLUSH_MS) return;  // 节流
+      lastHeartbeatFlush = t;
+      state.last_heartbeat_at = now();
+      flushPendingCounts(state);
+      writeStateJsonAtomic(state);
+    };
+    const { result, wroteFiles, toolCalls, aborted, maxTokens } = await runOneTask(taskLine, sessionId, onHeartbeat);
 
     // 捕获模型上下文窗口（首轮拿到就缓存进 state，后续复用；拿不到留 null，健康度判定自动跳过）
     if (state.ctx_max_tokens === null && typeof maxTokens === "number" && maxTokens > 0) {
@@ -749,6 +823,8 @@ async function tick(): Promise<TickOutcome> {
     // 步骤16: 写 state.json + tick_completed
     state.status = "idle";
     state.last_tick_at = now();
+    state.last_heartbeat_at = now();  // tick 出口刷新心跳（与 last_tick_at 对齐，表示本轮刚结束、活着）
+    flushPendingCounts(state);        // 把本轮 appendEvent 攒的 pending 计数合并进 state（tick 出口兜底）
     writeStateJsonAtomic(state);
     const outcome: TickOutcome["kind"] = didRealWork ? "advanced" : (state.stall_count > 0 ? "stalled" : "blocked");
     appendEvent("tick_completed", { outcome }, { tick_id: tickId, loop_count: state.loop_count });
@@ -947,6 +1023,7 @@ function showStatus() {
   console.log(`stall_count: ${s.stall_count} / ${STALL_LIMIT}`);
   console.log(`session_retries: ${s.session_retries} / ${SESSION_RETRY_LIMIT}`);
   console.log(`last_tick_at: ${s.last_tick_at ?? "(无)"}`);
+  console.log(`last_heartbeat_at: ${s.last_heartbeat_at ?? "(无)"}${s.last_heartbeat_at ? `（外部 agent 对比当前时间判卡死，阈值 > ${ABORT_TIMEOUT_MIN}min）` : ""}`);
   console.log(`last_tick_id: ${s.last_tick_id ?? "(无)"}`);
   console.log(`last_termination: ${s.last_termination ? `${s.last_termination.reason} @ ${s.last_termination.ts}` : "(无)"}`);
   const wr = watchRunning();

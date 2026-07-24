@@ -1,6 +1,6 @@
 ---
 name: loop-scheduler
-description: "loop-orchestrator 接入：--watch 长进程自管推进，结果结构化到 state.json/events.jsonl。外部 agent 定时读这些结果自行组织发战报。orchestrator 不发战报、不依赖外部触发推进。"
+description: "让 AI 24 小时无人值守自动开发——拉起后自主拆任务、写代码、跑测试、提交，崩了自动续跑。适合「帮我把这个项目从零搭起来」「自动把缺陷表里失败的项全修了」「跑一晚上把这个功能做完」这类要持续干很久、人不想盯着的开发活。"
 ---
 
 # Loop Scheduler
@@ -49,7 +49,9 @@ flowchart TB
   "last_tick_id": "20260724-140000-a1b2",
   "last_termination": null,      // {reason:"done", ts} | null
   "last_input_tokens": 164814,   // 上轮 input_tokens，供下轮 ctx 健康度判定
-  "ctx_max_tokens": 200000       // 模型上下文窗口（getContextUsage 实测，缓存）
+  "ctx_max_tokens": 200000,      // 模型上下文窗口（getContextUsage 实测，缓存）
+  "last_heartbeat_at": "2026-07-24 14:00:30",  // runOneTask 期间节流落盘的心跳，判 watch 卡死
+  "event_counts": {"task_completed": 14, "task_stall": 1}  // 事件累计计数（轮转丢明细不丢计数）
 }
 ```
 
@@ -61,6 +63,10 @@ flowchart TB
 - `ctx_overflow_retry` — 撞上下文重试中（未达上限）
 
 **ctx 健康度探针**：每轮记 `last_input_tokens`（上轮实际 input token）+ `ctx_max_tokens`（getContextUsage 实测窗口）。下轮若占比超 `CTX_RECYCLE_RATIO(0.7)`，先发 `/compact deep` 压一轮——压成功（`compact_probe_ok`，取 `compact_metadata.post_tokens` 判定）保留会话继续 resume，压不下来（`compact_probe_failed`）弃旧会话开新会话。防跨 tick 累积撞墙。
+
+**watch 卡死判定**：`last_tick_at` 只在 tick 入口/出口写，runOneTask 期间（最长 60min）冻结。看 `last_heartbeat_at`——它由 PostToolUse hook 节流落盘（每 30s），若 `当前时间 - last_heartbeat_at > 60min`（`ABORT_TIMEOUT_MIN`）且 `status=running`，判 watch 卡死（进程没崩但 query 挂死/看门狗失灵），需人工介入或重启。`last_tick_at` 配合看是否推进。
+
+**events 轮转**：events.jsonl 超 `EVENTS_ROTATE_LINES`(5000) 行滚动归档 `events.jsonl.1`（旧归档丢弃）。累计统计不丢——`event_counts` 存全历史计数，`--report` 读它而非扫全文件。
 
 ### events.jsonl（append-only 审计流，每行一个事件）
 

@@ -2,6 +2,8 @@
 
 24 小时无人值守开发 orchestrator —— 用 `@anthropic-ai/claude-agent-sdk` 的 `query()` 驱动 Claude 自主完成一整个开发目标。
 
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+
 > 核心理念：**重但稳 + 使用简单**。长跑拆成幂等单步 `tick`，状态双层落盘，进程崩溃天然可恢复；orchestrator 只管推进 + 结果结构化落盘，战报由外部 agent 读结果自行发送。
 
 ## 安装
@@ -232,13 +234,15 @@ loop 升级后重跑上述命令刷新 skill 内容。详见 [install.md](instal
 | ctx-overflow 重试 | 结构化判定（subtype+errors）+ 弃会话重开，连续 3 次标阻塞 | 上下文撑爆死循环 |
 | ctx 健康度探针 | 上轮 token 占比超 0.7 先发 `/compact deep` 压一轮（取 `compact_metadata.post_tokens` 判定），压不下来再弃会话 | 跨 tick 累积撞墙，avoid 被动等撑爆 |
 | 崩溃检测 | tick_started 与 tick_completed 配对（同 tick_id） | 发现未完成的崩溃 tick |
+| events 轮转 | 超 `EVENTS_ROTATE_LINES`(5000) 行滚动归档 `events.jsonl.1`，累计计数存 `state.event_counts`（丢明细不丢计数） | append-only 长跑涨到几百 MB，读路径变慢/OOM |
+| watch 卡死可观测 | runOneTask 期间节流落盘 `last_heartbeat_at`（`HEARTBEAT_FLUSH_MS`=30s），外部 agent 对比当前时间判卡死 | watch 进程没崩但卡死（代理挂/query 挂死）时无人告警 |
 
 ## 持久化文件
 
 | 文件 | 作用 |
 |---|---|
-| `state.json` | 机器读恢复点（原子写）：轮次/空转/commit/终止标记 |
-| `events.jsonl` | append-only 审计流，`--status`/`--report` 从它读 |
+| `state.json` | 机器读恢复点（原子写）：轮次/空转/commit/终止标记/心跳/事件累计计数 |
+| `events.jsonl` | append-only 审计流，`--status`/`--report` 从它读；超阈值轮转归档 `events.jsonl.1` |
 | `.task.md` | 任务列表 + 勾选状态（`[ ]`/`[x]`/`[~]`）——进度真相源 |
 | `.session_id` | Claude 会话 ID（单源，不进 state.json） |
 | `.stop` | 停止哨兵（`--stop` 写，`--resume` 删） |
