@@ -9,8 +9,14 @@ loop-orchestrator 的接入说明。loop 自驱推进开发任务、把结果结
 
 ## 职责边界
 
-- **loop orchestrator**：只管推进 + 结果结构化落盘。不发战报、不推送。
-- **外部 agent**（你）：定时读结果，自行组织战报文案、推送到你的频道。
+- **loop orchestrator**：推进 + 结果结构化落盘 + 拆任务。不发战报、不推送。
+- **外部 agent**（你）：定时读结果、组织战报、推送到你的频道。
+
+## 铁律（外部 agent 必须遵守）
+
+- 只把任务目标（goal）交给脚本，脚本自己拆任务。
+- 禁止编辑 `.task.md`。
+- 禁止自己拆任务——无论从哪里抠任务都不行。
 
 推进靠 `--watch` 长进程，崩了重启续跑（重启后从 `state.json` 恢复点继续，不丢进度、不重复打勾）。
 
@@ -33,6 +39,7 @@ loop --cwd <项目> --resume        # 恢复（删 .stop）
 ```
 
 ⚠️ 目标项目绝不能是 loop 仓库自身——会污染 git 历史。
+⚠️ 停 loop 用 `--stop`，别 `kill -9` watch 父进程——`--stop` 发 SIGTERM 会联动终止 claude 子进程后干净退出；`kill -9` 会让 claude 子进程变孤儿继续烧 token。`--resume` 清哨兵恢复。
 
 ## 结构化结果（你发战报的数据源）
 
@@ -61,8 +68,7 @@ loop --cwd <项目> --resume        # 恢复（删 .stop）
 - `blocked_suspect` — 疑假完成，需人工介入
 - `ctx_overflow_retry` — 撞上下文重试中
 
-- **判 watch 卡死**：`last_heartbeat_at` 若比当前时间老超过 60 分钟且 `status=running`，watch 可能卡死了（进程没崩但 query 挂死），需人工介入或重启。`last_tick_at` 因 tick 期间冻结，不能单独用来判卡死。
-- **停 loop 用 `--stop`**：它给 watch 进程发 SIGTERM，watch 的信号 handler 会 abort 正在跑的 query、连带终止 claude 子进程后干净退出，并写 `.stop` 哨兵阻止后续 tick。`--resume` 清哨兵恢复。**不要 `kill -9` watch 父进程**——会把 claude 子进程变成孤儿继续烧 token（SIGTERM 才会触发联动清理）。
+判 watch 卡死：`last_heartbeat_at` 比当前时间老超过 60 分钟且 `status=running` → watch 可能卡死（进程没崩但 query 挂死），需人工介入或重启。`last_tick_at` tick 期间冻结，不能单独判卡死。
 
 ### events.jsonl（append-only 审计流）
 
@@ -123,5 +129,6 @@ cp ~/.local/share/loop/loop.env.example ~/.config/loop.env && chmod 600 ~/.confi
 
 ## 已知行为
 
-- **bootstrap 慢属正常**：目标里若含 SPA 链接（腾讯文档等），WebFetch 拿不到表格数据，worker 会写 Playwright 脚本爬取——可能耗时 10+ 分钟但最终能成。让 orchestrator 自动 bootstrap，别手动预写 `.task.md`（自己拆的任务可能不符合 goal 结构）。
+- **bootstrap 慢属正常**：目标里若含 SPA 链接（腾讯文档等），WebFetch 拿不到表格数据，worker 会写 Playwright 脚本爬取——可能耗时 10+ 分钟但最终能成。别手动预写 `.task.md`（自己拆的任务可能不符合 goal 结构）。
+- **项目已 done 后跑新缺陷**：直接重启会被 `state.json` 的 `last_termination={reason:"done"}` 挡掉（tick 直接 already_terminated 跳过）。要继续跑，清掉 `state.json` 的 `last_termination` 字段（置 `null`）或换新 goal 触发重新 bootstrap。
 - **撞 blocked_suspect 先看探针**：`status=blocked_suspect`（疑假完成）或 `ctx_overflow_retry` 频繁时，查 events.jsonl 有没有 `compact_probe_ok`——有探针压成功说明 ctx 在自我回收；没有就是真撞墙，多半是目标项目上下文太大，可在项目根放 `.claudeignore` 压扫描范围。
