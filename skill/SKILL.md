@@ -113,6 +113,50 @@ cat /path/to/project/state.json
 tail -8 /path/to/project/events.jsonl
 ```
 
+**参考战报格式（非强制，文案/格式/频道由 agent 自定）：**
+
+正常推进中：
+
+```
+📊 loop 战报 20:38
+
+✅ 任务 3：数据库连接池配置 — 已完成
+🔄 第 2 轮，剩余 7/8
+📋 进行中：任务 4 gateway 规则编译失败时跳过而非整体重建
+🔧 当前操作：正在改 src/server.go
+⏱ 心跳：20:24:11（启动 20:07:54，已运行 30 分钟）
+📊 进度：1/8
+🧹 上下文 3.6M→9K（/compact deep 压缩成功）
+```
+
+有异常（空转）：
+
+```
+📊 loop 战报 20:45
+
+✅ 任务 3：数据库连接池配置 — 已完成
+✅ 任务 4：gateway 规则编译跳过 — 已完成
+🔄 第 3 轮，剩余 6/8
+📋 进行中：任务 5 admin 侧参数校验
+🔧 当前操作：跑 typecheck
+⏱ 心跳：20:43:22（启动 20:07:54，已运行 35 分钟）
+📊 进度：2/8
+⚠️ 第 2 轮曾空转 1 次（零改动）
+```
+
+全部完成：
+
+```
+📊 loop 战报 21:30
+
+✅ 全部 8 个任务已完成
+🔄 已结束，共 12 轮
+📊 进度：8/8
+⏱ 总耗时：约 1 小时 22 分钟
+```
+
+字段映射见上 state.json/events.jsonl/.task.md 定义（轮数→`loop_count`、剩余/进度→`.task.md`、心跳→`last_heartbeat_at`、空转→`stall_count`、压缩→`compact_probe_ok` 事件）。`当前操作`、`启动时间`等细粒度实时项 orchestrator 无专字段——agent 从 events 末尾的 PostToolUse 事件 / 首条 `tick_started` 自行推断。
+
 orchestrator 不参与战报生成——它只保证结果结构化、可靠落盘，外部 agent 爱怎么读、怎么推都行。推进与观察彻底解耦：watch 挂了不影响外部 agent 读结果发战报，外部 agent 挂了不影响 watch 推进。
 
 ### 3. 操控命令
