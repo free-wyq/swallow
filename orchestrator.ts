@@ -78,7 +78,7 @@ const EVENTS_FILE = "events.jsonl";     // append-only 审计流
 const STOP_FILE = ".stop";              // .stop 哨兵：--stop 写，--watch 下次 tick 检测到则退出
 const LOCK_FILE = ".tick.lock";          // flock 进程级并发保护（防多 watch / 手动与 watch 并发）
 
-// 限额写死（不读环境变量）：token 不限量场景下，预算/轮数护栏纯属挡路 → 一律 0=不限。
+// 限额写死（不读环境变量）：token 不限量场景下，轮数护栏纯属挡路 → 一律 0=不限。
 // 行为护栏留正数防死循环（空转/超时/重试）。要改改这里的常量，不必改 loop.env。
 const MAX_TURNS_PER_TASK = UNLIMITED;        // 单任务 agentic 轮上限；0=不限（token 不限量）
 const STALL_LIMIT = 3;                       // 同任务连续零改动 N 次标阻塞
@@ -86,6 +86,10 @@ const ABORT_TIMEOUT_MIN = 60;                // 单任务超 N 分钟无进展�
 const SESSION_RETRY_LIMIT = 3;               // 陷阱7：当前任务连续 session_dropped N 次标阻塞（防 ctx-overflow 死循环）
 // bootstrap 同样不限。拆解是大目标，限额易崩成拆解失败。
 const BOOTSTRAP_MAX_TURNS = UNLIMITED;
+// 上下文健康度：上轮 input_tokens 占模型上下文超 CTX_RECYCLE_RATIO → 下轮弃旧会话开新会话
+// （防同一 session 跨 tick 累积到撞墙——GLM ~300k，resume 进来的 bulk 历史常直接撑爆）。
+// 超阈值先试 /compact deep 探针压一轮，没降下来再弃会话。0=不启用。
+const CTX_RECYCLE_RATIO = 0.7;
 const WATCH_SLEEP_MS = 5_000;       // --watch tick 间隔
 const ALREADY_RUNNING_SLEEP_MS = 30_000; // 拿不到锁时的退避
 const LOCK_STALE_MS = 60_000;        // 锁 stale 阈值：proper-lockfile 自动检测并 takeover（进程 kill -9 后 60s 可被抢）
@@ -116,20 +120,22 @@ function log(msg: string) {
 
 // ---- 任务文件读写（.task.md 格式）----
 
-interface Tasks { total: number; remaining: number; }
+interface Tasks { total: number; remaining: number; done: number; blocked: number; }
 
+// remaining 只数 [ ]，blocked 数 [~]，done 数 [x]——三者各数各的，不互相推导（防阻塞被算进已完成）
 function readTasks(): Tasks {
-  if (!existsSync(TASK_FILE)) return { total: 0, remaining: 0 };
+  if (!existsSync(TASK_FILE)) return { total: 0, remaining: 0, done: 0, blocked: 0 };
   const text = readFileSync(TASK_FILE, "utf8");
-  const lines = text.split("\n");
-  let total = 0, rem = 0;
-  for (const l of lines) {
+  let total = 0, rem = 0, done = 0, blocked = 0;
+  for (const l of text.split("\n")) {
     const m = l.match(/^- \[([ x~])\]/);
     if (!m) continue;
     total++;
     if (m[1] === " ") rem++;
+    else if (m[1] === "x") done++;
+    else if (m[1] === "~") blocked++;
   }
-  return { total, remaining: rem };
+  return { total, remaining: rem, done, blocked };
 }
 
 function currentTaskLine(): string | null {
@@ -141,8 +147,7 @@ function currentTaskLine(): string | null {
 }
 
 function countBlocked(): number {
-  if (!existsSync(TASK_FILE)) return 0;
-  return (readFileSync(TASK_FILE, "utf8").match(/^- \[~\]/gm) || []).length;
+  return readTasks().blocked;
 }
 
 // 陷阱1: 原子写（write-file-atomic 处理 data fsync + dir fsync 顺序，崩溃后元数据不丢）
@@ -208,6 +213,45 @@ interface RoundOutcome {
   wroteFiles: string[];    // PostToolUse hook 捕获的文件写入
   toolCalls: number;       // 总工具调用数
   aborted: boolean;
+  postTokens: number | null;  // 压缩后总 token（/compact deep 探针用，普通轮=null）
+  maxTokens: number | null;   // 模型上下文窗口（runOneTask 首个 tool 间隙 getContextUsage 捕获）
+}
+
+// 上下文探针：ctx 偏重时先发 /compact deep 试压一轮，看能不能把会话压下来。
+// /compact 是本地 slash 命令，headless 下作为 prompt 发出可能触发压缩（SDK 未暴露直接触发口）。
+// deep 是 CLI 交互参数，类型里无 depth 字段，是否生效靠测：压完看 result 的 usage 降没降。
+// 仅当 sessionId 存在（有会话历史可压）且探针已启用时才跑。压不下来 caller 自然 fallback 弃会话。
+async function probeCompactDeep(sessionId: string | null): Promise<number | null> {
+  if (!sessionId) return null;   // 没会话历史，没东西可压
+  let compacted = false;
+  try {
+    const q = query({
+      prompt: "/compact deep",
+      options: {
+        resume: sessionId,
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
+        disallowedTools: ["EnterPlanMode", "ExitPlanMode", "AskUserQuestion"],
+      },
+    });
+    for await (const msg of q as AsyncIterable<SDKMessage>) {
+      // compact_boundary 出现 = 压缩真的发生了（trigger auto/manual）
+      if (msg.type === "system" && (msg as { subtype?: string }).subtype === "compact_boundary") {
+        compacted = true;
+      }
+      if (msg.type === "result") {
+        const r = msg as SDKResultMessage;
+        const tok = r.usage?.input_tokens;
+        // 压缩发生 + result 给出新 token 数 → 成功信号
+        if (compacted && typeof tok === "number") return tok;
+        // 没出 compact_boundary：/compact deep 没被识别成压缩命令（代理/headless 不支持）
+        if (typeof tok === "number") return compacted ? tok : null;
+      }
+    }
+  } catch (e) {
+    log(`⚠️ /compact deep 探针异常（忽略，fallback 弃会话）: ${(e as Error).message}`);
+  }
+  return null;
 }
 
 // 铁律 prompt：禁提问 + 自主决策 + 已完成检测（防假完成）
@@ -307,10 +351,23 @@ async function runOneTask(taskLine: string, sessionId: string | null): Promise<R
 
   let resultMsg: SDKResultMessage | null = null;
   let aborted = false;
+  let capturedMaxTokens: number | null = null;
   try {
     for await (const msg of q as AsyncIterable<SDKMessage>) {
       if (msg.type === "result") {
         resultMsg = msg as SDKResultMessage;
+      }
+      // 首个 tool 间隙抓一次模型上下文窗口（getContextUsage 只在 query 活跃时可调，这里是唯一窗口）。
+      // 拿到就存，失败静默（健康度判定会跳过，不误伤）。
+      if (capturedMaxTokens === null && msg.type === "assistant") {
+        try {
+          const usage = await q.getContextUsage();
+          if (typeof usage?.maxTokens === "number" && usage.maxTokens > 0) {
+            capturedMaxTokens = usage.maxTokens;
+          }
+        } catch {
+          // 代理模型可能不支持，忽略
+        }
       }
     }
   } catch (e) {
@@ -320,7 +377,7 @@ async function runOneTask(taskLine: string, sessionId: string | null): Promise<R
     if (watchdog) clearTimeout(watchdog);
   }
 
-  return { result: resultMsg, wroteFiles, toolCalls, aborted };
+  return { result: resultMsg, wroteFiles, toolCalls, aborted, postTokens: null, maxTokens: capturedMaxTokens };
 }
 
 // ---------------- state.json + events.jsonl 持久化 ----------------
@@ -337,6 +394,8 @@ interface StateJson {
   last_tick_at: string | null;
   last_tick_id: string | null;
   last_termination: { reason: "done"; ts: string } | null; // 陷阱4：防完成后续 cron 刷 done
+  last_input_tokens: number | null;  // 上轮上下文占用（result.usage.input_tokens），供下轮健康度判定
+  ctx_max_tokens: number | null;     // 模型上下文窗口（getContextUsage 捕获一次，稳定）
 }
 
 const DEFAULT_STATE: StateJson = {
@@ -351,6 +410,8 @@ const DEFAULT_STATE: StateJson = {
   last_tick_at: null,
   last_tick_id: null,
   last_termination: null,
+  last_input_tokens: null,
+  ctx_max_tokens: null,
 };
 
 // 陷阱1: 原子写 state.json（write-file-atomic：data fsync + dir fsync，崩溃后元数据不丢，进度数据不可丢）
@@ -555,12 +616,18 @@ async function tick(): Promise<TickOutcome> {
       return { kind: "stalled" };
     }
 
-    // 步骤8: 陷阱5 stallTask 跨 tick reset
+    // 步骤8: 陷阱5 stallTask 跨 tick reset + 陷阱7b 计数器跨任务 reset
     // （.task.md 可能被人工改后 stallTask 失效，currentTaskKey 变了就 reset）
+    // 同理：任务推进了（与上次空转的不是同一任务）→ session_retries/stall_count 也归零，
+    // 不带病继承到下一任务（修「每任务头一轮就被判死」的卡死 bug）。
     const taskKey = taskLine.slice(0, 120);
     if (state.stall_task !== taskKey) {
+      if (state.stall_task !== null) {
+        log(`↪️ 任务已推进，计数器归零（stall_count/session_retries reset）`);
+      }
       state.stall_task = null;
       state.stall_count = 0;
+      state.session_retries = 0;
     }
 
     // 步骤9: loop_count++，status=running，pre-run 写盘（让 --status 看到正在跑）
@@ -575,12 +642,39 @@ async function tick(): Promise<TickOutcome> {
 
     // 步骤10: 读 .session_id，session_resumed 事件
     let sessionId = readSessionId();
+    // 上下文健康度：上轮 input_tokens 占比超 CTX_RECYCLE_RATIO → 先试 /compact deep 探针压一轮，
+    // 压不下来（仍超阈值）才弃会话开新会话。防同一 session 跨 tick 累积撞墙。
+    if (sessionId && state.last_input_tokens !== null && CTX_RECYCLE_RATIO > 0) {
+      const max = state.ctx_max_tokens ?? 0;
+      if (max > 0 && state.last_input_tokens >= Math.floor(max * CTX_RECYCLE_RATIO)) {
+        log(`🧹 上下文偏重（${state.last_input_tokens}/${max} ≈ ${(state.last_input_tokens / max * 100).toFixed(0)}% ≥ ${CTX_RECYCLE_RATIO}），试 /compact deep 探针压一轮`);
+        const afterTokens = await probeCompactDeep(sessionId);
+        if (afterTokens !== null && max > 0 && afterTokens < Math.floor(max * CTX_RECYCLE_RATIO)) {
+          log(`✅ /compact deep 压成功：${state.last_input_tokens} → ${afterTokens}，保留会话继续 resume`);
+          appendEvent("compact_probe_ok", { before: state.last_input_tokens, after: afterTokens, ratio: CTX_RECYCLE_RATIO }, { tick_id: tickId, loop_count: state.loop_count });
+          state.last_input_tokens = afterTokens;
+        } else {
+          // 探针没压下来（/compact 未被识别或压完仍超阈值）→ 直接弃旧会话开新会话
+          log(`⚠️ /compact deep 未压到阈值（${afterTokens ?? "?"}/${max}），弃旧会话下轮开新会话`);
+          appendEvent("compact_probe_failed", { before: state.last_input_tokens, after: afterTokens, ratio: CTX_RECYCLE_RATIO }, { tick_id: tickId, loop_count: state.loop_count });
+          clearSessionId();
+          sessionId = null;
+          state.last_input_tokens = null;  // 新会话从零开始，旧 token 数作废
+        }
+      }
+    }
     if (sessionId) {
       appendEvent("session_resumed", { session_id: sessionId }, { tick_id: tickId, loop_count: state.loop_count });
     }
 
     // 步骤11: runOneTask（核心不变：query + PostToolUse hook + 看门狗）
-    const { result, wroteFiles, toolCalls, aborted } = await runOneTask(taskLine, sessionId);
+    const { result, wroteFiles, toolCalls, aborted, maxTokens } = await runOneTask(taskLine, sessionId);
+
+    // 捕获模型上下文窗口（首轮拿到就缓存进 state，后续复用；拿不到留 null，健康度判定自动跳过）
+    if (state.ctx_max_tokens === null && typeof maxTokens === "number" && maxTokens > 0) {
+      state.ctx_max_tokens = maxTokens;
+      log(`📏 模型上下文窗口 = ${maxTokens} tokens（已缓存，供 ctx 健康度判定）`);
+    }
 
     // 步骤12: session_id 更新（新会话 → session_created）
     if (result?.session_id && result.session_id !== sessionId) {
@@ -596,9 +690,12 @@ async function tick(): Promise<TickOutcome> {
       if (result.subtype !== "success") {
         log(`⚠️ 本轮非 success: subtype=${result.subtype} stop_reason=${result.stop_reason}`);
       }
+      // 记录上轮上下文占用，供下轮健康度判定（input_tokens = 本轮实际喂进模型的 token）。
+      const inTok = result.usage?.input_tokens;
+      if (typeof inTok === "number") state.last_input_tokens = inTok;
     }
 
-    // 步骤14: 陷阱6 ctx-overflow 改结构化判定（subtype + errors/stop_reason，不再 stringify+正则）
+    // 陷阱6 ctx-overflow 改结构化判定（subtype + errors/stop_reason，不再 stringify+正则）
     const isCtxOverflow =
       result?.subtype === "error_during_execution" &&
       (result.errors?.some((e) => /context|exceed|too long/i.test(e))
@@ -832,15 +929,18 @@ function watchRunning(): { running: boolean; pid: number | null } {
 function showStatus() {
   // 优先读 state.json
   const s = readStateJson();
-  const { total, remaining } = readTasks();
+  const { total, remaining, done, blocked } = readTasks();
   console.log("━".repeat(60));
   console.log("📊 orchestrator 状态");
   console.log("━".repeat(60));
   console.log(`status: ${s.status}`);
   console.log(`goal: ${s.goal || "(未设置)"}`);
+  console.log(`任务: 总 ${total} | 完成 ${done} | 阻塞 ${blocked} | 待办 ${remaining}`);
   console.log(`loop_count: ${s.loop_count}`);
-  console.log(`remaining: ${remaining} / ${total}`);
-  console.log(`completed: ${total - remaining}`);
+  if (s.ctx_max_tokens !== null && s.last_input_tokens !== null) {
+    const pct = (s.last_input_tokens / s.ctx_max_tokens * 100).toFixed(0);
+    console.log(`上下文: ${s.last_input_tokens}/${s.ctx_max_tokens} tokens（${pct}%，超 ${CTX_RECYCLE_RATIO} 触发 /compact deep 探针）`);
+  }
   console.log(`had_any_commit: ${s.had_any_commit}`);
   console.log(`stall_task: ${s.stall_task ?? "(无)"}`);
   console.log(`stall_count: ${s.stall_count} / ${STALL_LIMIT}`);
@@ -871,8 +971,8 @@ function showReport() {
   console.log("📊 无人值守运行报告");
   console.log("━".repeat(60));
   const s = readStateJson();
-  const { total, remaining } = readTasks();
-  console.log(`任务进度: ${total - remaining} / ${total} 已完成`);
+  const { total, remaining, done, blocked } = readTasks();
+  console.log(`任务进度: 完成 ${done} / 总 ${total}（阻塞 ${blocked} · 待办 ${remaining}）`);
   console.log(`loop_count: ${s.loop_count}`);
   console.log(`status: ${s.status}`);
   if (s.last_termination) console.log(`终止: ${s.last_termination.reason} @ ${s.last_termination.ts}`);
