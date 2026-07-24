@@ -102,7 +102,11 @@ flowchart TD
     Start([tick 入口]) --> Lock["flock<br/>拿不到→already_running"]
     Lock --> Check{"已停 / 已完成?"}
     Check -->|是| Exit([直接退出])
-    Check -->|否| Run["读任务 → runOneTask<br/>query+hook+看门狗"]
+    Check -->|否| Read["读任务"]
+    Read --> Ctx{"ctx 偏重?<br/>上轮 token≥0.7 窗口"}
+    Ctx -->|否| Run["runOneTask<br/>query+hook+看门狗"]
+    Ctx -->|是| Compact["发 /compact deep<br/>取 post_tokens 判定<br/>压不下来→弃旧会话"]
+    Compact --> Run
     Run --> Judge{"结果?"}
     Judge -->|崩溃/超时| Drop["弃会话重试<br/>连续3次标阻塞"]
     Judge -->|真改动| Adv["打勾+commit<br/>reset 计数"]
@@ -113,6 +117,7 @@ flowchart TD
     Write --> Release(["释放锁"])
 
     style Run fill:#e3f2fd
+    style Compact fill:#f3e5f5
 ```
 
 ### 崩溃恢复时序

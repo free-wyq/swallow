@@ -47,7 +47,9 @@ flowchart TB
   "status": "idle",              // idle/running/blocked_suspect/completed/ctx_overflow_retry
   "last_tick_at": "2026-07-24 14:00:00",
   "last_tick_id": "20260724-140000-a1b2",
-  "last_termination": null       // {reason:"done", ts} | null
+  "last_termination": null,      // {reason:"done", ts} | null
+  "last_input_tokens": 164814,   // 上轮 input_tokens，供下轮 ctx 健康度判定
+  "ctx_max_tokens": 200000       // 模型上下文窗口（getContextUsage 实测，缓存）
 }
 ```
 
@@ -58,13 +60,15 @@ flowchart TB
 - `blocked_suspect` — 疑假完成，需人工介入
 - `ctx_overflow_retry` — 撞上下文重试中（未达上限）
 
+**ctx 健康度探针**：每轮记 `last_input_tokens`（上轮实际 input token）+ `ctx_max_tokens`（getContextUsage 实测窗口）。下轮若占比超 `CTX_RECYCLE_RATIO(0.7)`，先发 `/compact deep` 压一轮——压成功（`compact_probe_ok`，取 `compact_metadata.post_tokens` 判定）保留会话继续 resume，压不下来（`compact_probe_failed`）弃旧会话开新会话。防跨 tick 累积撞墙。
+
 ### events.jsonl（append-only 审计流，每行一个事件）
 
 ```jsonc
 {"ts":"...","type":"task_completed","tick_id":"...","loop_count":15,"data":{"task":"...","committed":true}}
 ```
 
-事件类型：`tick_started` / `tick_completed` / `task_completed` / `task_stall` / `task_blocked` / `session_dropped` / `aborted` / `done` / `suspected_false_completion` / `bootstrap_completed` / `session_created` / `session_resumed` / `tick_skipped` / `tick_locked`。
+事件类型：`tick_started` / `tick_completed` / `task_completed` / `task_stall` / `task_blocked` / `session_dropped` / `aborted` / `done` / `suspected_false_completion` / `bootstrap_completed` / `session_created` / `session_resumed` / `tick_skipped` / `tick_locked` / `compact_probe_ok` / `compact_probe_failed`。
 
 **崩溃检测**：`tick_started` 无同 `tick_id` 的 `tick_completed` = 该 tick 崩溃。
 
