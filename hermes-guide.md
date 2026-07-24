@@ -21,10 +21,17 @@
 对应 Hermes 的 `terminal_tool(command, background=True, notify_on_complete=True)`：
 
 - `background=True` — loop --watch 作为后台进程跑，Hermes 不阻塞、继续干别的（比如下面的定时读战报）
-- `notify_on_complete=True` — **关键**。loop 进程退出时 Hermes 自动收到通知、触发一个自主 turn。此时 agent 看 state.json 判断：
-  - `last_termination` 有值 → 真完成了，不用管
-  - `status=blocked_suspect` → 疑假完成，推微信叫人
-  - 其它（崩了/被杀）→ loop 能从 state.json 续跑，agent 自己重新 `terminal(background=True, notify_on_complete=True)` 拉起续跑即可
+- `notify_on_complete=True` — **关键**。loop 进程退出时 Hermes 自动收到通知、触发一个自主 turn。
+
+loop 退出有两种情况，agent 看 `state.json` 区分（**别无脑重新拉起**）：
+
+| state.json 判据 | 含义 | agent 该做什么 |
+|---|---|---|
+| `last_termination` 有值（`{reason:"done",...}`） | 任务真做完了，loop 自己 break 退出 | **不拉起**。推一条「✅ 全部完成」收尾战报 |
+| `status=blocked_suspect` | 疑假完成（零 commit 或有阻塞），loop 自己退出等人工 | **不拉起**。推微信叫人介入 |
+| 其它（`last_termination` 为 null、status 非终态） | loop 崩了/被杀/卡死 | **重新拉起续跑**：`terminal(background=True, notify_on_complete=True)`，loop 从 state.json 接着跑 |
+
+「真完成」和「崩了」都是 loop 进程退出、都会触发 `notify_on_complete`，差别只在 state.json——loop 完成时会把 `last_termination` 写成 `{reason:"done"}` 再退出，崩了则没写。所以判据是 `last_termination`，不是「进程在不在」。
 
 不用写 watchdog 脚本——进程存活追踪 + 退出通知是 Hermes terminal 工具内置的（process_registry 带崩溃恢复 checkpoint）。
 
