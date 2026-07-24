@@ -296,8 +296,12 @@ function buildPrompt(taskLine: string): string {
 - 本轮结束直接结束，不要输出总结。`;
 }
 
+// 当前 runOneTask 的 AbortController——提模块级让信号 handler 够得着（abort → SDK close 杀 claude 子进程）。
+let activeAbort: AbortController | null = null;
+
 async function runOneTask(taskLine: string, sessionId: string | null, onHeartbeat: () => void): Promise<RoundOutcome> {
   const ac = new AbortController();
+  activeAbort = ac;
   const wroteFiles: string[] = [];
   let toolCalls = 0;
   let lastHeartbeat = Date.now();
@@ -377,6 +381,7 @@ async function runOneTask(taskLine: string, sessionId: string | null, onHeartbea
     else log(`⚠️ query 异常: ${(e as Error).message}`);
   } finally {
     if (watchdog) clearTimeout(watchdog);
+    if (activeAbort === ac) activeAbort = null;
   }
 
   return { result: resultMsg, wroteFiles, toolCalls, aborted, postTokens: null, maxTokens: capturedMaxTokens };
@@ -877,6 +882,24 @@ async function watch(goal: string) {
   }
 }
 
+// 信号处理：--stop / Ctrl-C / kill 给 watch 发 SIGTERM/SIGINT 时，abort 正在跑的 query + 退出进程。
+// 关键：不能只 abort 然后等 SDK 异步 close 杀子进程——SDK 的 close 是 stdin-EOF + 2s grace + SIGTERM + 5s SIGKILL，
+// 而 process.exit(0) 立刻终止父进程，来不及走完，子进程会残留成孤儿继续烧 token。
+// 所以 handler 里同步做三件事：abort（让 SDK 关闭）+ 清 PID 文件（process.exit 不走 finally）+ process.exit(0)，
+// process.exit 会触发 SDK 的 process.on("exit") 钩子（mxe）对仍在的 claude 子进程补发 SIGTERM 做兜底。
+// 之前 --stop 只杀 watch 父进程、claude 子进程变孤儿残留，需手动 pkill -f 'claude.*stream-json' 清——现不用了。
+let stopping = false;
+function handleSignal(sig: NodeJS.Signals) {
+  if (stopping) return;
+  stopping = true;
+  log(`收到 ${sig}，abort query + 退出（连带终止 claude 子进程）`);
+  if (activeAbort) activeAbort.abort();
+  rmSync(PID_FILE, { force: true });  // process.exit 不会走 watch finally，这里同步清
+  process.exit(0);
+}
+process.on("SIGTERM", handleSignal);
+process.on("SIGINT", handleSignal);
+
 // ---------------- bootstrap：知识优先，按需探索 ----------------
 // 旧设计让 LLM 自己 agentic 探索项目拿上下文 → 要么探索过度爆上下文（Claude Code 拆得准但爆）、
 // 要么没上下文纯靠 goal 猜（Hermes 拆得不准）。根因是「谁拿项目上下文」绑在了 LLM 身上。
@@ -1075,17 +1098,18 @@ function showReport() {
   }
 }
 
-// 陷阱3: --stop 改为写 .stop 哨兵 + 杀 --watch PID（如有且活着）
+// 陷阱3: --stop 写 .stop 哨兵 + 给 --watch 进程发 SIGTERM。
+// SIGTERM 由 watch 的 handleSignal 捕获 → abort 正在跑的 query → SDK kill claude 子进程（父子一起干净停）。
+// 不再需要 pkill -f 'claude.*stream-json' 手动清孤儿子进程。
 function stopAll() {
   log("收到 --stop 指令，写 .stop 哨兵");
   writeFileSync(STOP_FILE, `${now()} PID=${process.pid}\n`);
-  // 杀 --watch PID（如果存在且活着）—— tick 是短进程，杀了 cron 5m 后又来，所以靠哨兵而非杀进程
   if (existsSync(PID_FILE)) {
     const pid = Number(readFileSync(PID_FILE, "utf8"));
     if (!isNaN(pid)) {
       try {
         process.kill(pid, "SIGTERM");
-        console.log(`已发送 SIGTERM 给 --watch 进程 PID=${pid}`);
+        console.log(`已发送 SIGTERM 给 --watch 进程 PID=${pid}（会连带终止 claude 子进程）`);
       } catch {
         console.log(`--watch 进程 PID=${pid} 未运行（PID 文件残留）`);
       }
