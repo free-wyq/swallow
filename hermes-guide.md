@@ -6,9 +6,8 @@ loop --watch 自驱推进开发任务、把结果结构化落盘；Hermes 定时
 
 ## 前置
 
-- loop 已装：`curl -fsSL https://raw.githubusercontent.com/free-wyq/loop/main/install.sh | bash`
-- `~/.config/loop.env` 配好密钥/代理/模型（`chmod 600`）
-- Hermes 已装、企业微信已配（`hermes setup` 里配企业微信群机器人 webhook）
+- **loop 没装？** 让 Hermes 读 [install.md](install.md) 自行装好（含 `~/.config/loop.env` 密钥/代理/模型配置，那条命令 + 填 key 就行）。
+- **企业微信** 在 `hermes setup` 里配群机器人 webhook。
 
 下文 `<项目>` 一律替换成你的项目绝对路径，如 `/home/you/work/myapp`。
 
