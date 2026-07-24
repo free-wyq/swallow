@@ -54,8 +54,14 @@ flowchart TB
       direction TB
       BOOT["bootstrap 拆任务 · query()"]
       TICK["tick 幂等单步 · while 循环"]
-      RUN["runOneTask · query()"]
-      SDK["PostToolUse 捕真实改动<br/>看门狗超时强杀"]
+      RUN["runOneTask · query()<br/>进程内调 SDK"]
+      SDK["claude-agent-sdk（npm 包）<br/>挂 hook · 流式收消息 · abortController"]
+      CLI["claude 引擎（随 SDK 打包的二进制）<br/>工具调用/文件读写/权限/会话<br/>PostToolUse 回调真实改动"]
+      BOOT --> TICK
+      TICK -->|"读首个未完成"| RUN
+      RUN --> SDK
+      SDK -->|"spawn 子进程"| CLI
+      CLI -.->|"PostToolUse 回调"| RUN
     end
 
     subgraph EXTBOX["📡 外部 agent / 用户（脚本之外）"]
@@ -69,11 +75,7 @@ flowchart TB
     KNOW -->|"loadProjectKnowledge 喂基线"| BOOT
     ENV -.->|"密钥/代理/模型"| BOOT
     BOOT -->|"写出"| TASK
-    BOOT --> TICK
-    TICK -->|"读首个未完成"| RUN
     ENV -.->|"密钥/模型"| RUN
-    RUN --> SDK
-    SDK --> TICK
     TICK -->|"原子写状态"| STATE
     TICK --> EVENTS
     TICK -->|"打勾 [x]/[~]"| TASK
@@ -87,40 +89,19 @@ flowchart TB
     style STATE fill:#c8e6c9
     style EVENTS fill:#bbdefb
     style TICK fill:#ffe0b2
+    style SDK fill:#e8f5e9
+    style CLI fill:#ffe0b2
     style KNOW fill:#e1bee7
     style ENV fill:#fff59d
 ```
+
+调用链一图看清：**用户/外部 agent** 拉起 `--watch` → orchestrator 脚本的 `runOneTask` 进程内调 **SDK**（`query()`）→ SDK spawn 一个 **claude 引擎**子进程跑工具调用 → 引擎的 `PostToolUse` hook 把真实文件写入事件回调给脚本。**引擎是随 SDK 打包的 `claude` 二进制**（`optionalDependencies` 按平台自动拉，npm install 即装齐），不是系统 `which claude`——用户无需另装 Claude Code，唯一前提 Node 18+。外部 agent 另起定时**读已落盘结果**（state.json/events.jsonl/.task.md）自行组织发战报，与脚本互不依赖。
 
 四个边界一图看清（虚线=读取/喂入，实线=主推进流）：
 - ⚙️ **主机配置（黄框）**——`~/.config/loop.env` 是 Linux/macOS 主机路径（XDG 约定），存密钥 + 代理/模型。不属项目、不属脚本：脚本启动时读进 env，已 export 的不覆盖。限额写死在脚本（见橙框），不在这。
 - 📁 **项目边界（绿框）**——`--cwd` 指向的目标项目：已有知识（CLAUDE.md/memory）+ 全部产物（.task.md/state.json/events.jsonl）都落在它目录里，git commit 进它仓库。
 - 🛠️ **脚本边界（橙框）**——loop orchestrator 本体（`orchestrator.ts` 的 `--watch` 进程）：bootstrap 拆解 + tick 执行是两个独立 `query()`。**限额写死在脚本顶部常量**（token 不限量，轮数护栏纯属挡路 → 一律 0=不限；行为护栏留正数防死循环），不读 loop.env；loop.env 只喂密钥/代理/模型。
 - 📡 **外部 agent 边界（蓝框）**——脚本之外的角色（用户 / claw 等）：**拉起** `--watch` 启动推进，另起定时**读已落盘结果**自行组织发战报。与脚本互不依赖（任一方挂了不影响另一方）。
-
-### tick() 控制流（崩溃恢复核心，watch 内部循环调用）
-
-```mermaid
-flowchart TD
-    Start([tick 入口]) --> Lock["flock<br/>拿不到→already_running"]
-    Lock --> Check{"已停 / 已完成?"}
-    Check -->|是| Exit([直接退出])
-    Check -->|否| Read["读任务"]
-    Read --> Ctx{"ctx 偏重?<br/>上轮 token≥0.7 窗口"}
-    Ctx -->|否| Run["runOneTask<br/>query+hook+看门狗"]
-    Ctx -->|是| Compact["发 /compact deep<br/>取 post_tokens 判定<br/>压不下来→弃旧会话"]
-    Compact --> Run
-    Run --> Judge{"结果?"}
-    Judge -->|崩溃/超时| Drop["弃会话重试<br/>连续3次标阻塞"]
-    Judge -->|真改动| Adv["打勾+commit<br/>reset 计数"]
-    Judge -->|空转| Stall["空转计数<br/>满3标阻塞"]
-    Drop --> Write(["写盘 + tick_completed"])
-    Adv --> Write
-    Stall --> Write
-    Write --> Release(["释放锁"])
-
-    style Run fill:#e3f2fd
-    style Compact fill:#f3e5f5
-```
 
 ### 崩溃恢复时序
 
