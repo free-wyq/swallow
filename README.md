@@ -54,9 +54,9 @@ flowchart TB
       direction TB
       BOOT["bootstrap 拆任务 · query()"]
       TICK["tick 幂等单步 · while 循环"]
-      RUN["runOneTask · query()<br/>进程内调 SDK"]
-      SDK["claude-agent-sdk（npm 包）<br/>挂 hook · 流式收消息 · abortController"]
-      CLI["claude 引擎（随 SDK 打包的二进制）<br/>工具调用/文件读写/权限/会话<br/>PostToolUse 回调真实改动"]
+      RUN["runOneTask · query()"]
+      SDK["claude-agent-sdk（npm 包）"]
+      CLI["claude 引擎（随 SDK 打包）"]
       BOOT --> TICK
       TICK -->|"读首个未完成"| RUN
       RUN --> SDK
