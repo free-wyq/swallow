@@ -65,10 +65,10 @@ flowchart TB
     end
 
     subgraph EXTBOX["📡 外部 agent / 用户（脚本之外）"]
-      direction TB
-      User([拉起 --watch])
+      direction LR
       Ext([定时读结果])
       Push([自行组织发战报])
+      User([拉起 --watch])
     end
 
     User -->|"拉起"| BOOT
