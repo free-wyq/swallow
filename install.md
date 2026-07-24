@@ -8,7 +8,7 @@
 curl -fsSL https://raw.githubusercontent.com/free-wyq/loop/main/install.sh | bash
 ```
 
-装到中立路径（不碰任何 agent 私有目录）：代码 `~/.local/share/loop`、命令 `~/.local/bin/loop`、配置 `~/.config/loop.env`（密钥/限额）。已有同名文件自动备份成 `.bak`，不静默覆盖。不改 shell rc（PATH 不在 `~/.local/bin` 会提示加一行）。
+装到中立路径（不碰任何 agent 私有目录）：代码 `~/.local/share/loop`、命令 `~/.local/bin/loop`、配置 `~/.config/loop.env`（密钥/代理/模型）。已有同名文件自动备份成 `.bak`，不静默覆盖。不改 shell rc（PATH 不在 `~/.local/bin` 会提示加一行）。
 
 装完即用：
 
@@ -54,21 +54,25 @@ chmod 600 ~/.config/loop.env   # 密钥别让别的用户读到
 ```
 
 > 想换路径：`export LOOP_ENV_FILE=/path/to/your.env`。
+>
+> 限额不在这——写死在 `orchestrator.ts` 顶部常量（见下节）。
 
-## 限额（默认不限；想要护栏再设）
+## 限额（写死在脚本，不读 loop.env）
 
-自托管 / 免费代理的模型**没有按量计费**，预算护栏纯属挡路（实测：GLM 代理单任务 $3、bootstrap $1 都不够会崩成 `blocked`/拆解失败）。所以默认全部 `0 = 不限`。要护栏再在 `loop.env` 里设正数：
+当前大背景 token 不限量（自托管/免费代理模型无按量计费），预算/轮数护栏纯属挡路——所以**限额写死在 `orchestrator.ts` 顶部常量**，不读 loop.env。
 
-| 变量 | 默认 | 含义 |
+| 常量 | 值 | 含义 |
 |---|---|---|
-| `LOOP_MAX_TURNS` | 0（不限） | 单任务最大轮数 |
-| `LOOP_MAX_BUDGET_PER_TASK` | 0（不限） | 单任务美元上限 |
-| `LOOP_MAX_BUDGET_TOTAL` | 0（不限） | 全程美元上限 |
-| `LOOP_BOOTSTRAP_MAX_TURNS` | 0（不限） | bootstrap（任务拆解）最大轮数 |
-| `LOOP_BOOTSTRAP_MAX_BUDGET` | 0（不限） | bootstrap 美元上限 |
-| `LOOP_STALL_LIMIT` | 3 | 同任务连续零改动 N 次标阻塞 |
-| `LOOP_ABORT_TIMEOUT_MIN` | 60 | 单任务超 N 分钟无进展则 abort 重试 |
-| `LOOP_SESSION_RETRY_LIMIT` | 3 | 当前任务连续 ctx 撑爆 N 次标阻塞 |
+| `MAX_TURNS_PER_TASK` | 0（不限） | 单任务最大轮数 |
+| `MAX_BUDGET_PER_TASK` | 0（不限） | 单任务美元上限 |
+| `MAX_BUDGET_TOTAL` | 0（不限） | 全程美元上限 |
+| `BOOTSTRAP_MAX_TURNS` | 0（不限） | bootstrap（任务拆解）最大轮数 |
+| `BOOTSTRAP_MAX_BUDGET` | 0（不限） | bootstrap 美元上限 |
+| `STALL_LIMIT` | 3 | 同任务连续零改动 N 次标阻塞 |
+| `ABORT_TIMEOUT_MIN` | 60 | 单任务超 N 分钟无进展则 abort 重试 |
+| `SESSION_RETRY_LIMIT` | 3 | 当前任务连续 ctx 撑爆 N 次标阻塞 |
+
+要改限额改 `orchestrator.ts` 顶部这几行（`0=不限`，`hasLimit(n)=n>0` 自洽），不用动 loop.env。行为护栏（后三个）留正数防死循环。
 
 ## 可选：外部 agent 发战报 / 注册 skill
 

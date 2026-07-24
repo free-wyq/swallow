@@ -58,23 +58,10 @@ function loadEnvFileOnce() {
 }
 loadEnvFileOnce();
 
-// 读环境变量配置的限额：贵模型（如 GLM 代理单次成本高于 Anthropic）或大项目可临时调宽，
-// 不用改代码、不用重装。写进 ~/.config/loop.env 即可（见上 loadEnvFileOnce）。
-// 约定：0 = 不限（默认）。自托管/免费代理的模型没有按量计费，预算护栏纯属挡路（实测 GLM 代理
-// 单任务 $3、bootstrap $1 都不够会崩成 blocked）。要护栏再设正数；轮数同理 0 = 不限。
-const envInt = (name: string, def: number): number => {
-  const v = process.env[name];
-  if (v == null || v === "") return def;
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : def;
-};
-const envNum = (name: string, def: number): number => {
-  const v = process.env[name];
-  if (v == null || v === "") return def;
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? n : def;
-};
-const UNLIMITED = 0;  // 0 表示不限；配置项比较时用 hasLimit(n) = n > 0
+// 限额写死在脚本（不读 loop.env）：当前大背景 token 不限量（自托管/免费代理模型无按量计费），
+// 预算/轮数护栏纯属挡路 → 一律 0=不限；行为护栏（空转/超时/重试）留正数防死循环。要改改下面的常量。
+// 密钥/代理/模型才走 loop.env（见 loadEnvFileOnce）。hasLimit(n)=n>0 让写死的值自洽：0=关、正数=开。
+const UNLIMITED = 0;  // 0 表示不限；常量比较时用 hasLimit(n) = n > 0
 const hasLimit = (n: number) => n > 0;
 
 // ---------------- 配置 ----------------
@@ -91,16 +78,17 @@ const EVENTS_FILE = "events.jsonl";     // append-only 审计流
 const STOP_FILE = ".stop";              // .stop 哨兵：--stop 写，--watch 下次 tick 检测到则退出
 const LOCK_FILE = ".tick.lock";          // flock 进程级并发保护（防多 watch / 手动与 watch 并发）
 
-const MAX_TURNS_PER_TASK = envInt("LOOP_MAX_TURNS", 0);             // 单任务 agentic 轮上限；0=不限（自托管/免费代理模型）
-const MAX_BUDGET_PER_TASK = envNum("LOOP_MAX_BUDGET_PER_TASK", 0); // 单任务美元上限；0=不限（无按量计费时护栏纯属挡路）
-const MAX_BUDGET_TOTAL = envNum("LOOP_MAX_BUDGET_TOTAL", 0);       // 全程美元上限；0=不限
-const STALL_LIMIT = envInt("LOOP_STALL_LIMIT", 3);                 // 同任务连续零改动 N 次标阻塞
-const ABORT_TIMEOUT_MIN = envInt("LOOP_ABORT_TIMEOUT_MIN", 60);    // 单任务超 N 分钟无进展则 abort 重试
-const SESSION_RETRY_LIMIT = envInt("LOOP_SESSION_RETRY_LIMIT", 3); // 陷阱7：当前任务连续 session_dropped N 次标阻塞（防 ctx-overflow 死循环）
-// bootstrap 单独一组，默认也不限。拆解是大目标，贵模型单次成本高，设限额易崩成拆解失败。
-// 用 LOOP_BOOTSTRAP_MAX_TURNS / LOOP_BOOTSTRAP_MAX_BUDGET 调（同样 0=不限）。
-const BOOTSTRAP_MAX_TURNS = envInt("LOOP_BOOTSTRAP_MAX_TURNS", 0);
-const BOOTSTRAP_MAX_BUDGET = envNum("LOOP_BOOTSTRAP_MAX_BUDGET", 0);
+// 限额写死（不读环境变量）：token 不限量场景下，预算/轮数护栏纯属挡路 → 一律 0=不限。
+// 行为护栏留正数防死循环（空转/超时/重试）。要改改这里的常量，不必改 loop.env。
+const MAX_TURNS_PER_TASK = UNLIMITED;        // 单任务 agentic 轮上限；0=不限（token 不限量）
+const MAX_BUDGET_PER_TASK = UNLIMITED;       // 单任务美元上限；0=不限（无按量计费时护栏纯属挡路）
+const MAX_BUDGET_TOTAL = UNLIMITED;          // 全程美元上限；0=不限
+const STALL_LIMIT = 3;                       // 同任务连续零改动 N 次标阻塞
+const ABORT_TIMEOUT_MIN = 60;                // 单任务超 N 分钟无进展则 abort 重试
+const SESSION_RETRY_LIMIT = 3;               // 陷阱7：当前任务连续 session_dropped N 次标阻塞（防 ctx-overflow 死循环）
+// bootstrap 同样不限。拆解是大目标，限额易崩成拆解失败。
+const BOOTSTRAP_MAX_TURNS = UNLIMITED;
+const BOOTSTRAP_MAX_BUDGET = UNLIMITED;
 const WATCH_SLEEP_MS = 5_000;       // --watch tick 间隔
 const ALREADY_RUNNING_SLEEP_MS = 30_000; // 拿不到锁时的退避
 const LOCK_STALE_MS = 60_000;        // 锁 stale 阈值：proper-lockfile 自动检测并 takeover（进程 kill -9 后 60s 可被抢）

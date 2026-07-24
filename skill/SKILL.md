@@ -80,7 +80,7 @@ flowchart TB
 curl -fsSL https://raw.githubusercontent.com/free-wyq/loop/main/install.sh | bash
 ```
 
-装到中立路径：代码 `~/.local/share/loop`、命令 `~/.local/bin/loop`、配置 `~/.config/loop.env`（密钥/限额）。不碰 shell rc、不替用户装 Node、不静默覆盖（已有备份 `.bak`）。
+装到中立路径：代码 `~/.local/share/loop`、命令 `~/.local/bin/loop`、配置 `~/.config/loop.env`（密钥/代理/模型）。不碰 shell rc、不替用户装 Node、不静默覆盖（已有备份 `.bak`）。
 
 ## 用法
 
@@ -130,7 +130,7 @@ cp -r ~/.local/share/loop/skill "$SKILLS_DIR/loop-scheduler"
 
 loop 升级后重跑上述命令刷新。
 
-## 密钥 / 限额配置
+## 密钥 / 代理配置
 
 非交互进程跑干净 env 不 source `~/.bashrc`，密钥写进 `~/.config/loop.env`（orchestrator 启动自动读，已 export 的不覆盖）：
 
@@ -139,7 +139,7 @@ cp ~/.local/share/loop/loop.env.example ~/.config/loop.env && chmod 600 ~/.confi
 # 填 ANTHROPIC_API_KEY=sk-...；走代理加 ANTHROPIC_BASE_URL=http://...:3000、ANTHROPIC_MODEL=glm-5.1
 ```
 
-限额默认全 `0 = 不限`（自托管/免费代理模型没有按量计费，护栏纯属挡路）。要护栏再设正数：`LOOP_MAX_TURNS`/`LOOP_MAX_BUDGET_PER_TASK`/`LOOP_MAX_BUDGET_TOTAL`/`LOOP_BOOTSTRAP_MAX_TURNS`/`LOOP_BOOTSTRAP_MAX_BUDGET`/`LOOP_STALL_LIMIT`/`LOOP_ABORT_TIMEOUT_MIN`/`LOOP_SESSION_RETRY_LIMIT`。详见 [install.md](../install.md)。
+限额不在这——写死在 `orchestrator.ts` 顶部常量（token 不限量场景下预算/轮数护栏纯属挡路，一律 `0=不限`；行为护栏 `STALL_LIMIT`/`ABORT_TIMEOUT_MIN`/`SESSION_RETRY_LIMIT` 留正数防死循环）。要改改代码，不读 loop.env。详见 [install.md](../install.md)。
 
 ## 崩溃恢复（自动，无需人工）
 

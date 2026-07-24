@@ -11,7 +11,7 @@
 # 装到 POSIX 中立路径（不进任何 agent 私有目录）：
 #   代码  ~/.local/share/loop
 #   命令  ~/.local/bin/loop          (自驱入口，透传参数给 orchestrator.ts)
-#   配置  ~/.config/loop.env          (密钥/限额，chmod 600)
+#   配置  ~/.config/loop.env          (密钥/代理/模型，chmod 600)
 set -euo pipefail
 
 REPO_URL="https://github.com/free-wyq/loop.git"

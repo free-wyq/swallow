@@ -37,7 +37,7 @@ https://raw.githubusercontent.com/free-wyq/loop/main/install.md
 ```mermaid
 flowchart TB
     subgraph HOST["⚙️ 主机配置 · Linux/macOS（~/.config/）"]
-      ENV[("loop.env<br/>密钥 + 限额 0=不限")]
+      ENV[("loop.env<br/>密钥 + 代理/模型")]
     end
 
     subgraph PROJ["📁 目标项目（--cwd 指向）· 产物写入处 + git commit 仓库"]
@@ -65,11 +65,11 @@ flowchart TB
 
     User -->|"拉起"| BOOT
     KNOW -->|"loadProjectKnowledge 喂基线"| BOOT
-    ENV -.->|"限额 envInt/envNum"| BOOT
+    ENV -.->|"密钥/代理/模型"| BOOT
     BOOT -->|"写出"| TASK
     BOOT --> TICK
     TICK -->|"读首个未完成"| RUN
-    ENV -.-> RUN
+    ENV -.->|"密钥/模型"| RUN
     RUN --> SDK
     SDK --> TICK
     TICK -->|"★阶段A 成本立即写"| STATE
@@ -90,9 +90,9 @@ flowchart TB
 ```
 
 四个边界一图看清（虚线=读取/喂入，实线=主推进流）：
-- ⚙️ **主机配置（黄框）**——`~/.config/loop.env` 是 Linux/macOS 主机路径（XDG 约定），存密钥 + 限额。不属项目、不属脚本：脚本启动时读进 env，已 export 的不覆盖。
+- ⚙️ **主机配置（黄框）**——`~/.config/loop.env` 是 Linux/macOS 主机路径（XDG 约定），存密钥 + 代理/模型。不属项目、不属脚本：脚本启动时读进 env，已 export 的不覆盖。限额写死在脚本（见橙框），不在这。
 - 📁 **项目边界（绿框）**——`--cwd` 指向的目标项目：已有知识（CLAUDE.md/memory）+ 全部产物（.task.md/state.json/events.jsonl）都落在它目录里，git commit 进它仓库。
-- 🛠️ **脚本边界（橙框）**——loop orchestrator 本体（`orchestrator.ts` 的 `--watch` 进程）：bootstrap 拆解 + tick 执行是两个独立 `query()`，都吃主机配置的限额。
+- 🛠️ **脚本边界（橙框）**——loop orchestrator 本体（`orchestrator.ts` 的 `--watch` 进程）：bootstrap 拆解 + tick 执行是两个独立 `query()`。**限额写死在脚本顶部常量**（token 不限量，预算/轮数护栏纯属挡路 → 一律 0=不限；行为护栏留正数防死循环），不读 loop.env；loop.env 只喂密钥/代理/模型。
 - 📡 **外部 agent 边界（蓝框）**——脚本之外的角色（用户 / claw 等）：**拉起** `--watch` 启动推进，另起定时**读已落盘结果**自行组织发战报。与脚本互不依赖（任一方挂了不影响另一方）。
 
 ### tick() 控制流（崩溃恢复核心，watch 内部循环调用）
@@ -156,22 +156,17 @@ chmod 600 ~/.config/loop.env   # 编辑填 ANTHROPIC_API_KEY=sk-...（走代理�
 loop --cwd /path/to/project "构建一个 Go REST API"
 ```
 
-### 配置（密钥 / 代理 / 限额）
+### 配置（密钥 / 代理 / 模型）
 
-cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥得写进 `~/.config/loop.env`，orchestrator 启动自动读（已 export 的不覆盖）。限额默认全 `0 = 不限`（自托管/免费代理模型没有按量计费，预算护栏纯属挡路），要护栏再在 `loop.env` 设正数。详见 [install.md](install.md)。
+cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥得写进 `~/.config/loop.env`，orchestrator 启动自动读（已 export 的不覆盖）。
 
-| 变量 | 默认 | 含义 |
+| 变量 | 必填 | 含义 |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | 鉴权（写进 loop.env） |
-| `ANTHROPIC_BASE_URL` | 官方 | 走代理/中转才填 |
-| `ANTHROPIC_MODEL` 等 | — | 走代理时指定模型名 |
-| `LOOP_MAX_TURNS` | 0（不限） | 单任务最大轮数 |
-| `LOOP_MAX_BUDGET_PER_TASK` | 0（不限） | 单任务美元上限 |
-| `LOOP_MAX_BUDGET_TOTAL` | 0（不限） | 全程美元上限 |
-| `LOOP_BOOTSTRAP_MAX_TURNS` / `LOOP_BOOTSTRAP_MAX_BUDGET` | 0（不限） | bootstrap 拆解限额 |
-| `LOOP_STALL_LIMIT` | 3 | 同任务连续零改动 N 次标阻塞 |
-| `LOOP_ABORT_TIMEOUT_MIN` | 60 | 单任务超 N 分钟无进展则 abort |
-| `LOOP_SESSION_RETRY_LIMIT` | 3 | 当前任务连续 ctx 撑爆 N 次标阻塞 |
+| `ANTHROPIC_API_KEY` | 是 | 鉴权（写进 loop.env） |
+| `ANTHROPIC_BASE_URL` | 代理才填 | 走代理/中转才填 |
+| `ANTHROPIC_MODEL` 等 | 代理才填 | 走代理时指定模型名 |
+
+**限额不在这里**——写死在 `orchestrator.ts` 顶部常量（token 不限量场景下预算/轮数护栏纯属挡路，一律 `0 = 不限`；行为护栏 `STALL_LIMIT=3` / `ABORT_TIMEOUT_MIN=60` / `SESSION_RETRY_LIMIT=3` 留正数防死循环）。要改改代码，不读 loop.env。详见 [install.md](install.md)。
 
 ## 命令一览
 
@@ -274,7 +269,7 @@ loop 升级后重跑上述命令刷新 skill 内容。详见 [install.md](instal
 - `PostToolUse` hook 实时捕获真实文件写入 → 完成判定看真实事件（不靠 `git diff` 猜）
 - `abortController` + `Stop` hook 刷新心跳 → 看门狗事件驱动，不轮询
 - `disallowedTools` 移除 `EnterPlanMode`/`ExitPlanMode`/`AskUserQuestion`（防卡住）
-- 预算/轮数护栏默认关（`0 = 不限`），走付费模型再在 `loop.env` 设正数（单任务 + 全程双护栏）
+- 预算/轮数护栏写死在脚本常量、默认全 `0 = 不限`（token 不限量场景护栏纯属挡路）；loop.env 只管密钥/代理/模型
 - 会话策略：首轮新会话、后续 resume、**永不 continue**（防旧会话污染）
 - 每轮自动 commit（本地不 push），带 Co-Authored-By trailer
 - 日志用本地时间（跟随系统时区 / `TZ`），不再 `toISOString()` 输出 UTC
