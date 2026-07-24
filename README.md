@@ -225,6 +225,7 @@ loop 升级后重跑上述命令刷新 skill 内容。详见 [install.md](instal
 | 进程级锁 | `proper-lockfile`（stale 60s 自动 takeover） | 多 watch / 手动与 watch 并发冲突；kill -9 残留锁 |
 | 假完成三重校验 | 零改动不打勾 + 连续 3 次空转标阻塞 + 全程零 commit 不退出 | agent 空退/假完成 |
 | ctx-overflow 重试 | 结构化判定（subtype+errors）+ 弃会话重开，连续 3 次标阻塞 | 上下文撑爆死循环 |
+| ctx 健康度探针 | 上轮 token 占比超 0.7 先发 `/compact deep` 压一轮（取 `compact_metadata.post_tokens` 判定），压不下来再弃会话 | 跨 tick 累积撞墙，avoid 被动等撑爆 |
 | 崩溃检测 | tick_started 与 tick_completed 配对（同 tick_id） | 发现未完成的崩溃 tick |
 
 ## 持久化文件
@@ -241,7 +242,7 @@ loop 升级后重跑上述命令刷新 skill 内容。详见 [install.md](instal
 
 ## 上下文管理（SDK 自带 + prompt 节流）
 
-`autoCompactEnabled` 默认 true：上下文快满自动压成摘要，会话不中断、`session_id` 不变。真撑爆了（query 报 `error_during_execution` 含 context）→ 弃会话重开。
+`autoCompactEnabled` 默认 true：上下文快满自动压成摘要，会话不中断、`session_id` 不变。真撑爆了（query 报 `error_during_execution` 含 context）→ 弃会话重开。另外 orchestrator 有主动 ctx 健康度探针：每轮结束记 `input_tokens` + `getContextUsage` 测窗口，下轮若占比超 `CTX_RECYCLE_RATIO(0.7)` 先发 `/compact deep` 压一轮（取 `compact_boundary.compact_metadata.post_tokens` 判定，压不下来再弃旧会话开新会话）。
 
 ### bootstrap 知识优先 + 按需探索（防拆任务爆上下文）
 
@@ -255,7 +256,7 @@ loop 升级后重跑上述命令刷新 skill 内容。详见 [install.md](instal
 
 **不锁死文件工具**：CLAUDE.md/memory 当基线喂进来，剩下细节模型按需 Read/Grep——无脑全扫才爆上下文，按需探索不会。旧工程复用已有知识、不重扫；真新工程走退路给个地图当起点。Hermes 以前不准就是没上下文，现在基线喂进去了，谁拆都准。
 
-⚠️ GLM 等代理模型上下文只有 ~300k。worker prompt 已加节流铁律：只读与当前任务相关的文件、复用 `.claude/memory/` 已有背景、大文件 Grep 定位再按行 Read。目标项目可放 `.claudeignore` 进一步压扫描范围。orchestrator 这层不手管上下文。
+⚠️ GLM 等代理模型上下文有限（运行时由 orchestrator 经 `getContextUsage` 实测，不写死）。worker prompt 已加节流铁律：只读与当前任务相关的文件、复用 `.claude/memory/` 已有背景、大文件 Grep 定位再按行 Read。目标项目可放 `.claudeignore` 进一步压扫描范围。orchestrator 这层另加 ctx 健康度探针：上轮 token 占比超阈值先发 `/compact deep` 压一轮，压不下来再弃旧会话开新会话。
 
 ---
 

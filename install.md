@@ -68,8 +68,9 @@ chmod 600 ~/.config/loop.env   # 密钥别让别的用户读到
 | `STALL_LIMIT` | 3 | 同任务连续零改动 N 次标阻塞 |
 | `ABORT_TIMEOUT_MIN` | 60 | 单任务超 N 分钟无进展则 abort 重试 |
 | `SESSION_RETRY_LIMIT` | 3 | 当前任务连续 ctx 撑爆 N 次标阻塞 |
+| `CTX_RECYCLE_RATIO` | 0.7 | 上轮 token 占窗口比超此值 → 下轮先发 `/compact deep` 探针压一轮（取 `compact_metadata.post_tokens` 判定），压不下来再弃会话。0=不启用 |
 
-要改限额改 `orchestrator.ts` 顶部这几行（`0=不限`，`hasLimit(n)=n>0` 自洽），不用动 loop.env。行为护栏（后三个）留正数防死循环。预算护栏已随成本追踪一并移除（token 不限量场景下无意义）。
+要改限额改 `orchestrator.ts` 顶部这几行（`0=不限`，`hasLimit(n)=n>0` 自洽），不用动 loop.env。行为护栏（后三个）留正数防死循环。预算护栏已随成本追踪一并移除（token 不限量场景下无意义）。ctx 健康度探针是主动型护栏：窗口大小运行时由 `getContextUsage` 实测（非写死）。
 
 ## 可选：外部 agent 发战报 / 注册 skill
 

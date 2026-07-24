@@ -87,8 +87,9 @@ const SESSION_RETRY_LIMIT = 3;               // 陷阱7：当前任务连续 ses
 // bootstrap 同样不限。拆解是大目标，限额易崩成拆解失败。
 const BOOTSTRAP_MAX_TURNS = UNLIMITED;
 // 上下文健康度：上轮 input_tokens 占模型上下文超 CTX_RECYCLE_RATIO → 下轮弃旧会话开新会话
-// （防同一 session 跨 tick 累积到撞墙——GLM ~300k，resume 进来的 bulk 历史常直接撑爆）。
+// （防同一 session 跨 tick 累积到撞墙——代理模型上下文有限，resume 进来的 bulk 历史常直接撑爆）。
 // 超阈值先试 /compact deep 探针压一轮，没降下来再弃会话。0=不启用。
+// （窗口大小不写死——运行时由 getContextUsage 实测，非注释里的某个估计值。）
 const CTX_RECYCLE_RATIO = 0.7;
 const WATCH_SLEEP_MS = 5_000;       // --watch tick 间隔
 const ALREADY_RUNNING_SLEEP_MS = 30_000; // 拿不到锁时的退避
@@ -218,12 +219,14 @@ interface RoundOutcome {
 }
 
 // 上下文探针：ctx 偏重时先发 /compact deep 试压一轮，看能不能把会话压下来。
-// /compact 是本地 slash 命令，headless 下作为 prompt 发出可能触发压缩（SDK 未暴露直接触发口）。
-// deep 是 CLI 交互参数，类型里无 depth 字段，是否生效靠测：压完看 result 的 usage 降没降。
-// 仅当 sessionId 存在（有会话历史可压）且探针已启用时才跑。压不下来 caller 自然 fallback 弃会话。
+// /compact 是本地 slash 命令，headless 下作为 prompt 发出即触发压缩（GLM 代理实测可用）。
+// 压缩后大小取 compact_boundary.compact_metadata.post_tokens（权威信号）—— 不能取 result.usage.input_tokens：
+// /compact 这一轮无 assistant 输出，实测 result.usage.input_tokens=0，会误判压缩后大小为 0。
+// 出 compact_boundary 且有 post_tokens → 返回压缩后大小供 caller 比阈值（保留会话）；
+// 没出 compact_boundary（/compact 未被识别）或没 post_tokens → 返回 null，caller fallback 弃会话。
 async function probeCompactDeep(sessionId: string | null): Promise<number | null> {
   if (!sessionId) return null;   // 没会话历史，没东西可压
-  let compacted = false;
+  let postTokens: number | null = null;
   try {
     const q = query({
       prompt: "/compact deep",
@@ -235,23 +238,17 @@ async function probeCompactDeep(sessionId: string | null): Promise<number | null
       },
     });
     for await (const msg of q as AsyncIterable<SDKMessage>) {
-      // compact_boundary 出现 = 压缩真的发生了（trigger auto/manual）
+      // compact_metadata.post_tokens = 压缩后真实 token 数（trigger=manual/auto）
       if (msg.type === "system" && (msg as { subtype?: string }).subtype === "compact_boundary") {
-        compacted = true;
-      }
-      if (msg.type === "result") {
-        const r = msg as SDKResultMessage;
-        const tok = r.usage?.input_tokens;
-        // 压缩发生 + result 给出新 token 数 → 成功信号
-        if (compacted && typeof tok === "number") return tok;
-        // 没出 compact_boundary：/compact deep 没被识别成压缩命令（代理/headless 不支持）
-        if (typeof tok === "number") return compacted ? tok : null;
+        const post = (msg as { compact_metadata?: { post_tokens?: number } }).compact_metadata?.post_tokens;
+        if (typeof post === "number") postTokens = post;
       }
     }
   } catch (e) {
     log(`⚠️ /compact deep 探针异常（忽略，fallback 弃会话）: ${(e as Error).message}`);
+    return null;
   }
-  return null;
+  return postTokens;
 }
 
 // 铁律 prompt：禁提问 + 自主决策 + 已完成检测（防假完成）
@@ -284,7 +281,7 @@ function buildPrompt(taskLine: string): string {
 4. 执行任务（代码写到文件）。遇到决策点自己拍板。
 5. 更新 .claude/memory/progress.md。
 
-## 上下文预算（防撑爆，尤其 GLM 等代理模型上下文只有 ~300k）
+## 上下文预算（防撑爆，尤其代理模型上下文有限）
 - 只读与当前任务直接相关的文件，不要扫全项目、不要批量 Read 源码树。
 - 复用 .claude/memory/ 里已有的项目背景，不要重新探索。
 - 大文件用 Grep 定位再按行 Read，别整文件打开。
