@@ -833,7 +833,8 @@ async function tick(): Promise<TickOutcome> {
     if (remaining === 0) {
       const blocked = countBlocked();
       // 防假完成守卫：有阻塞标记或全程零 commit → suspected_false_completion（不设 last_termination，待人工介入）
-      if (blocked > 0 || !state.had_any_commit) {
+      // 没 git 时不走 commit 检查（gitCommitIfChanged 永远返回 false，had_any_commit 恒假；PostToolUse 钩子已兜底单 tick 假完成）
+      if (blocked > 0 || (existsSync(".git") && !state.had_any_commit)) {
         log(`⚠️ remaining=0 但 ${blocked > 0 ? `${blocked} 个 [~] 阻塞` : "全程零 commit"}：疑假完成，挂起待人工核实（不设 last_termination）`);
         appendEvent("suspected_false_completion", { blocked, had_any_commit: state.had_any_commit, total }, { tick_id: tickId, loop_count: state.loop_count });
         state.status = "blocked_suspect";
