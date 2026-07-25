@@ -1,15 +1,15 @@
 ---
-name: loop-scheduler
+name: swallow-scheduler
 description: "让 AI 24 小时无人值守自动开发——拉起后自主拆任务、写代码、跑测试、提交，崩了自动续跑。适合「帮我把这个项目从零搭起来」「自动把缺陷表里失败的项全修了」「跑一晚上把这个功能做完」这类要持续干很久、人不想盯着的开发活。"
 ---
 
-# Loop Scheduler
+# Swallow Scheduler
 
-loop-orchestrator 的接入说明。loop 自驱推进开发任务、把结果结构化落盘；外部 agent 定时读结果发战报。
+swallow 的接入说明。swallow 自驱推进开发任务、把结果结构化落盘；外部 agent 定时读结果发战报。
 
 ## 职责边界
 
-- **loop orchestrator**：推进 + 结果结构化落盘 + 拆任务。不发战报、不推送。
+- **swallow orchestrator**：推进 + 结果结构化落盘 + 拆任务。不发战报、不推送。
 - **外部 agent**（你）：定时读结果、组织战报、推送到你的频道。
 
 ## 铁律（外部 agent 必须遵守）
@@ -23,23 +23,23 @@ loop-orchestrator 的接入说明。loop 自驱推进开发任务、把结果结
 ## 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/free-wyq/loop/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
 ```
 
-装到中立路径：代码 `~/.local/share/loop`、命令 `~/.local/bin/loop`、配置 `~/.config/loop.env`。`orchestrator.ts` 依赖 loop 仓库的 `node_modules`（含随 SDK 打包的 claude 引擎），不能单独搬走；要换开发项目改 `--cwd`，别改 orchestrator。
+装到中立路径：代码 `~/.local/share/swallow`、命令 `~/.local/bin/swallow`、配置 `~/.config/swallow.env`。`orchestrator.ts` 依赖 swallow 仓库的 `node_modules`（含随 SDK 打包的 claude 引擎），不能单独搬走；要换开发项目改 `--cwd`，别改 orchestrator。
 
 ## 用法
 
 ```bash
-loop --cwd <项目> "目标"          # 拉起推进（--watch 自驱）
-loop --cwd <项目> --status        # 实时状态
-loop --cwd <项目> --report        # 运行报告
-loop --cwd <项目> --stop          # 临时停（写 .stop 哨兵）
-loop --cwd <项目> --resume        # 恢复（删 .stop）
+swallow --cwd <项目> "目标"       # 拉起推进（--watch 自驱）
+swallow --cwd <项目> --status     # 实时状态
+swallow --cwd <项目> --report     # 运行报告
+swallow --cwd <项目> --stop        # 临时停（写 .stop 哨兵）
+swallow --cwd <项目> --resume     # 恢复（删 .stop）
 ```
 
-⚠️ 目标项目绝不能是 loop 仓库自身——会污染 git 历史。
-⚠️ 停 loop 用 `--stop`，别 `kill -9` watch 父进程——`--stop` 发 SIGTERM 会联动终止 claude 子进程后干净退出；`kill -9` 会让 claude 子进程变孤儿继续烧 token。`--resume` 清哨兵恢复。
+⚠️ 目标项目绝不能是 swallow 仓库自身——会污染 git 历史。
+⚠️ 停 swallow 用 `--stop`，别 `kill -9` watch 父进程——`--stop` 发 SIGTERM 会联动终止 claude 子进程后干净退出；`kill -9` 会让 claude 子进程变孤儿继续烧 token。`--resume` 清哨兵恢复。
 
 ## 结构化结果（你发战报的数据源）
 
@@ -87,7 +87,7 @@ loop --cwd <项目> --resume        # 恢复（删 .stop）
 起定时任务读上述文件，按你的判断组织战报。参考格式（非强制）：
 
 ```
-📊 loop 战报 20:38
+📊 swallow 战报 20:38
 
 ✅ 任务 3：数据库连接池配置 — 已完成
 🔄 第 2 轮，剩余 7/8
@@ -98,7 +98,7 @@ loop --cwd <项目> --resume        # 恢复（删 .stop）
 🧹 上下文 3.6M→9K（/compact deep 压缩成功）
 ```
 
-字段映射：轮数→`loop_count`、剩余/进度→`.task.md`、心跳→`last_heartbeat_at`、空转→`stall_count`、压缩→`compact_probe_ok` 事件。`当前操作`、`启动时间`等细粒度项 loop 无专字段——从 events 末尾事件 / night_run.log 自行推断。
+字段映射：轮数→`loop_count`、剩余/进度→`.task.md`、心跳→`last_heartbeat_at`、空转→`stall_count`、压缩→`compact_probe_ok` 事件。`当前操作`、`启动时间`等细粒度项 swallow 无专字段——从 events 末尾事件 / night_run.log 自行推断。
 
 接入实战（任务执行 + 定时战报 + 微信推送）：
 - [Hermes 实战](../hermes-guide.md)
@@ -111,23 +111,23 @@ loop --cwd <项目> --resume        # 恢复（删 .stop）
 ```bash
 # 推理你 agent 的 skills 目录（常见：~/.claude/skills · ~/.codex/skills · ~/.gemini/skills · ~/.cursor/skills · ~/.hermes/skills）
 SKILLS_DIR=~/.claude/skills
-mkdir -p "$SKILLS_DIR"; rm -rf "$SKILLS_DIR/loop-scheduler"
-cp -r ~/.local/share/loop/skill "$SKILLS_DIR/loop-scheduler"
-find "$SKILLS_DIR/loop-scheduler" -name SKILL.md   # 验证：应返回一行
+mkdir -p "$SKILLS_DIR"; rm -rf "$SKILLS_DIR/swallow-scheduler"
+cp -r ~/.local/share/swallow/skill "$SKILLS_DIR/swallow-scheduler"
+find "$SKILLS_DIR/swallow-scheduler" -name SKILL.md   # 验证：应返回一行
 ```
 
-loop 升级后重跑上述命令刷新。
+swallow 升级后重跑上述命令刷新。
 
 ## 密钥 / 代理配置
 
-非交互进程不 source `~/.bashrc`，密钥写进 `~/.config/loop.env`（loop 启动自动读，已 export 的不覆盖）：
+非交互进程不 source `~/.bashrc`，密钥写进 `~/.config/swallow.env`（swallow 启动自动读，已 export 的不覆盖）：
 
 ```bash
-cp ~/.local/share/loop/loop.env.example ~/.config/loop.env && chmod 600 ~/.config/loop.env
+cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow.env && chmod 600 ~/.config/swallow.env
 # 填 ANTHROPIC_API_KEY=sk-...；走代理加 ANTHROPIC_BASE_URL=http://...:3000、ANTHROPIC_MODEL=glm-5.1
 ```
 
-限额写死在 `orchestrator.ts` 顶部常量（不读 loop.env），详见 [install.md](../install.md)。
+限额写死在 `orchestrator.ts` 顶部常量（不读 swallow.env），详见 [install.md](../install.md)。
 
 ## 已知行为
 

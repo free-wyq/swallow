@@ -1,4 +1,4 @@
-# loop-orchestrator
+# swallow
 
 24 小时无人值守开发 orchestrator —— 用 `@anthropic-ai/claude-agent-sdk` 的 `query()` 驱动 Claude 自主完成一整个开发目标。
 
@@ -13,7 +13,7 @@
 ### 方式一 · `.sh`：一条命令（人 / 智能体直接执行）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/free-wyq/loop/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
 ```
 
 ### 方式二 · `.md`：给智能体读（它读完自行装）
@@ -21,14 +21,14 @@ curl -fsSL https://raw.githubusercontent.com/free-wyq/loop/main/install.sh | bas
 把这个地址发给你的 AI 助手：
 
 ```
-https://raw.githubusercontent.com/free-wyq/loop/main/install.md
+https://raw.githubusercontent.com/free-wyq/swallow/main/install.md
 ```
 
 让它读这个文档、按文档执行上面的 bash 即可装好。适合让 agent 自主配置、或不想手动敲命令的场景。
 
 ---
 
-两种方式都装到中立路径（不碰任何 agent 私有目录），装完即用 `loop --cwd <项目> "目标"`。卸载/重装/升级见 [install.md](install.md)。
+两种方式都装到中立路径（不碰任何 agent 私有目录），装完即用 `swallow --cwd <项目> "目标"`。卸载/重装/升级见 [install.md](install.md)。
 
 ---
 
@@ -39,7 +39,7 @@ https://raw.githubusercontent.com/free-wyq/loop/main/install.md
 ```mermaid
 flowchart TB
     subgraph HOST["⚙️ 主机配置 · Linux/macOS（~/.config/）"]
-      ENV[("loop.env<br/>密钥 + 代理/模型")]
+      ENV[("swallow.env<br/>密钥 + 代理/模型")]
     end
 
     subgraph PROJ["📁 目标项目（--cwd 指向）· 产物写入处 + git commit 仓库"]
@@ -50,7 +50,7 @@ flowchart TB
       EVENTS[("events.jsonl<br/>append-only 审计")]
     end
 
-    subgraph SCRIPT["🛠️ loop orchestrator（脚本）· --watch 长进程"]
+    subgraph SCRIPT["🛠️ swallow orchestrator（脚本）· --watch 长进程"]
       direction TB
       BOOT["bootstrap 拆任务 · query()"]
       TICK["tick 幂等单步 · while 循环"]
@@ -98,9 +98,9 @@ flowchart TB
 调用链一图看清：**用户/外部 agent** 拉起 `--watch` → orchestrator 脚本的 `runOneTask` 进程内调 **SDK**（`query()`）→ SDK spawn 一个 **claude 引擎**子进程跑工具调用 → 引擎的 `PostToolUse` hook 把真实文件写入事件回调给脚本。**引擎是随 SDK 打包的 `claude` 二进制**（`optionalDependencies` 按平台自动拉，npm install 即装齐），不是系统 `which claude`——用户无需另装 Claude Code，唯一前提 Node 18+。外部 agent 另起定时**读已落盘结果**（state.json/events.jsonl/.task.md）自行组织发战报，与脚本互不依赖。
 
 四个边界一图看清（虚线=读取/喂入，实线=主推进流）：
-- ⚙️ **主机配置（黄框）**——`~/.config/loop.env` 是 Linux/macOS 主机路径（XDG 约定），存密钥 + 代理/模型。不属项目、不属脚本：脚本启动时读进 env，已 export 的不覆盖。限额写死在脚本（见橙框），不在这。
+- ⚙️ **主机配置（黄框）**——`~/.config/swallow.env` 是 Linux/macOS 主机路径（XDG 约定），存密钥 + 代理/模型。不属项目、不属脚本：脚本启动时读进 env，已 export 的不覆盖。限额写死在脚本（见橙框），不在这。
 - 📁 **项目边界（绿框）**——`--cwd` 指向的目标项目：已有知识（CLAUDE.md/memory）+ 全部产物（.task.md/state.json/events.jsonl）都落在它目录里，git commit 进它仓库。
-- 🛠️ **脚本边界（橙框）**——loop orchestrator 本体（`orchestrator.ts` 的 `--watch` 进程）：bootstrap 拆解 + tick 执行是两个独立 `query()`。**限额写死在脚本顶部常量**（token 不限量，轮数护栏纯属挡路 → 一律 0=不限；行为护栏留正数防死循环），不读 loop.env；loop.env 只喂密钥/代理/模型。
+- 🛠️ **脚本边界（橙框）**——swallow orchestrator 本体（`orchestrator.ts` 的 `--watch` 进程）：bootstrap 拆解 + tick 执行是两个独立 `query()`。**限额写死在脚本顶部常量**（token 不限量，轮数护栏纯属挡路 → 一律 0=不限；行为护栏留正数防死循环），不读 swallow.env；swallow.env 只喂密钥/代理/模型。
 - 📡 **外部 agent 边界（蓝框）**——脚本之外的角色（用户 / claw 等）：**拉起** `--watch` 启动推进，另起定时**读已落盘结果**自行组织发战报。与脚本互不依赖（任一方挂了不影响另一方）。
 
 ### 崩溃恢复时序
@@ -131,42 +131,42 @@ sequenceDiagram
 
 ```bash
 # 1. 一条命令安装（agent 无关，装到 ~/.local）
-curl -fsSL https://raw.githubusercontent.com/free-wyq/loop/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
 
-# 2. 配密钥（非交互调度器不 source ~/.bashrc，写进 loop.env 才拿得到）
-cp ~/.local/share/loop/loop.env.example ~/.config/loop.env
-chmod 600 ~/.config/loop.env   # 编辑填 ANTHROPIC_API_KEY=sk-...（走代理再加 ANTHROPIC_BASE_URL/ANTHROPIC_MODEL）
+# 2. 配密钥（非交互调度器不 source ~/.bashrc，写进 swallow.env 才拿得到）
+cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow.env
+chmod 600 ~/.config/swallow.env   # 编辑填 ANTHROPIC_API_KEY=sk-...（走代理再加 ANTHROPIC_BASE_URL/ANTHROPIC_MODEL）
 
 # 3. 跑（产物写在 --cwd 指定的项目目录）
-loop --cwd /path/to/project "构建一个 Go REST API"
+swallow --cwd /path/to/project "构建一个 Go REST API"
 ```
 
 ### 配置（密钥 / 代理 / 模型）
 
-cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥得写进 `~/.config/loop.env`，orchestrator 启动自动读（已 export 的不覆盖）。
+cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥得写进 `~/.config/swallow.env`，orchestrator 启动自动读（已 export 的不覆盖）。
 
 | 变量 | 必填 | 含义 |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | 是 | 鉴权（写进 loop.env） |
+| `ANTHROPIC_API_KEY` | 是 | 鉴权（写进 swallow.env） |
 | `ANTHROPIC_BASE_URL` | 代理才填 | 走代理/中转才填 |
 | `ANTHROPIC_MODEL` 等 | 代理才填 | 走代理时指定模型名 |
 
-**限额不在这里**——写死在 `orchestrator.ts` 顶部常量（token 不限量场景下轮数护栏纯属挡路，一律 `0 = 不限`；行为护栏 `STALL_LIMIT=3` / `ABORT_TIMEOUT_MIN=60` / `SESSION_RETRY_LIMIT=3` 留正数防死循环）。要改改代码，不读 loop.env。详见 [install.md](install.md)。
+**限额不在这里**——写死在 `orchestrator.ts` 顶部常量（token 不限量场景下轮数护栏纯属挡路，一律 `0 = 不限`；行为护栏 `STALL_LIMIT=3` / `ABORT_TIMEOUT_MIN=60` / `SESSION_RETRY_LIMIT=3` 留正数防死循环）。要改改代码，不读 swallow.env。详见 [install.md](install.md)。
 
 ## 命令一览
 
 | 命令 | 作用 |
 |---|---|
-| `loop --cwd <proj> "目标"` | 裸跑 = `--watch`，自驱跑到完成 |
-| `loop --cwd <proj> --watch "目标"` | 显式自驱（bootstrap + `while(tick)`） |
-| `loop --cwd <proj> --status` | 实时状态（多行，读 state.json + events.jsonl） |
-| `loop --cwd <proj> --report` | 运行报告 |
-| `loop --cwd <proj> --stop` | 停（写 `.stop` 哨兵 + 杀 `--watch`） |
-| `loop --cwd <proj> --resume` | 清 `.stop` 哨兵恢复 |
+| `swallow --cwd <proj> "目标"` | 裸跑 = `--watch`，自驱跑到完成 |
+| `swallow --cwd <proj> --watch "目标"` | 显式自驱（bootstrap + `while(tick)`） |
+| `swallow --cwd <proj> --status` | 实时状态（多行，读 state.json + events.jsonl） |
+| `swallow --cwd <proj> --report` | 运行报告 |
+| `swallow --cwd <proj> --stop` | 停（写 `.stop` 哨兵 + 杀 `--watch`） |
+| `swallow --cwd <proj> --resume` | 清 `.stop` 哨兵恢复 |
 
-`--cwd` 决定三件事，三者统一：① 产物写入处 ② `git commit` 的仓库 ③ 会话工作目录。不传则回退 `LOOP_PROJECT` 环境变量或当前目录。**别在 loop 仓库根目录裸跑**——会把产物写进 loop 仓库并 commit 它。
+`--cwd` 决定三件事，三者统一：① 产物写入处 ② `git commit` 的仓库 ③ 会话工作目录。不传则回退 `SWALLOW_PROJECT` 环境变量或当前目录。**别在 swallow 仓库根目录裸跑**——会把产物写进 swallow 仓库并 commit 它。
 
-> 未装 `loop` 命令、直接在 loop 仓库内开发时，`loop` 等价于 `npx tsx orchestrator.ts`。
+> 未装 `swallow` 命令、直接在 swallow 仓库内开发时，`swallow` 等价于 `npx tsx orchestrator.ts`。
 
 ---
 
@@ -180,7 +180,7 @@ cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥�
 
 ```bash
 # 推进（一次）
-loop --cwd /path/to/project "构建一个 Go REST API"
+swallow --cwd /path/to/project "构建一个 Go REST API"
 
 # 外部 agent 定时读结果发战报（由该 agent 的定时机制实现，读结构化文件即可）
 #   cat /path/to/project/state.json
@@ -196,12 +196,12 @@ loop --cwd /path/to/project "构建一个 Go REST API"
 ```bash
 # 推理你 agent 的 skills 目录（常见：~/.claude/skills · ~/.codex/skills · ~/.gemini/skills · ~/.cursor/skills · ~/.hermes/skills）
 SKILLS_DIR=~/.claude/skills
-mkdir -p "$SKILLS_DIR"; rm -rf "$SKILLS_DIR/loop-scheduler"
-cp -r ~/.local/share/loop/skill "$SKILLS_DIR/loop-scheduler"
-# 验证扫描器能看到：find "$SKILLS_DIR/loop-scheduler" -name SKILL.md   # 应返回一行
+mkdir -p "$SKILLS_DIR"; rm -rf "$SKILLS_DIR/swallow-scheduler"
+cp -r ~/.local/share/swallow/skill "$SKILLS_DIR/swallow-scheduler"
+# 验证扫描器能看到：find "$SKILLS_DIR/swallow-scheduler" -name SKILL.md   # 应返回一行
 ```
 
-loop 升级后重跑上述命令刷新 skill 内容。详见 [install.md](install.md)。
+swallow 升级后重跑上述命令刷新 skill 内容。详见 [install.md](install.md)。
 
 ---
 
@@ -256,7 +256,7 @@ loop 升级后重跑上述命令刷新 skill 内容。详见 [install.md](instal
 - `PostToolUse` hook 实时捕获真实文件写入 → 完成判定看真实事件（不靠 `git diff` 猜）
 - `abortController` + `Stop` hook 刷新心跳 → 看门狗事件驱动，不轮询
 - `disallowedTools` 移除 `EnterPlanMode`/`ExitPlanMode`/`AskUserQuestion`（防卡住）
-- 轮数护栏写死在脚本常量、默认 `0 = 不限`（token 不限量场景护栏纯属挡路）；loop.env 只管密钥/代理/模型
+- 轮数护栏写死在脚本常量、默认 `0 = 不限`（token 不限量场景护栏纯属挡路）；swallow.env 只管密钥/代理/模型
 - 会话策略：首轮新会话、后续 resume、**永不 continue**（防旧会话污染）
 - 每轮自动 commit（本地不 push），带 Co-Authored-By trailer
 - 日志用本地时间（跟随系统时区 / `TZ`），不再 `toISOString()` 输出 UTC

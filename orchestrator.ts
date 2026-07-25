@@ -9,7 +9,7 @@
 //   npx tsx orchestrator.ts [--cwd <项目目录>] --resume         # 删 .stop 哨兵
 //
 // --cwd 指定目标项目目录（产物写入处 + git commit 的仓库 + 会话工作目录）；不传则用当前目录
-// 或 LOOP_PROJECT 环境变量。
+// 或 SWALLOW_PROJECT 环境变量。
 //
 // 会话策略：首轮新会话（query 返回的 session_id 落盘 .session_id），后续轮 resume 同一会话；
 // 永不使用 continue（避免旧会话污染）。session_id 由 .session_id 文件单源管理（不进 state.json）。
@@ -31,14 +31,14 @@ import lockfile from "proper-lockfile";
 import writeFileAtomic from "write-file-atomic";
 const writeAtomic = (path: string, data: string) => writeFileAtomic.sync(path, data);
 
-// ---------------- 启动期：加载 loop.env（调度器友好）----------------
+// ---------------- 启动期：加载 swallow.env（调度器友好）----------------
 // cron / systemd / hermes cron 这类非交互调度器跑的是干净 env，不会 source ~/.bashrc——
 // 用户写在 ~/.bashrc 里的 ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL 它们根本拿不到
 // （实测：调度器里得手 export + sed 抠 ~/.bashrc 才跑得通，极脆、还常触发审批）。
-// 放一份 KEY=VALUE 进 ~/.config/loop.env，orchestrator 启动时读进 process.env；
-// 已 export 的环境变量优先、不覆盖。LOOP_ENV_FILE 可指到别处。
+// 放一份 KEY=VALUE 进 ~/.config/swallow.env，orchestrator 启动时读进 process.env；
+// 已 export 的环境变量优先、不覆盖。SWALLOW_ENV_FILE 可指到别处。
 function loadEnvFileOnce() {
-  const path = process.env.LOOP_ENV_FILE || `${homedir()}/.config/loop.env`;
+  const path = process.env.SWALLOW_ENV_FILE || `${homedir()}/.config/swallow.env`;
   let text: string;
   try { text = readFileSync(path, "utf8"); } catch { return; }  // 不存在/读不到就跳过
   for (const raw of text.split("\n")) {
@@ -58,9 +58,9 @@ function loadEnvFileOnce() {
 }
 loadEnvFileOnce();
 
-// 限额写死在脚本（不读 loop.env）：当前大背景 token 不限量（自托管/免费代理模型无按量计费），
+// 限额写死在脚本（不读 swallow.env）：当前大背景 token 不限量（自托管/免费代理模型无按量计费），
 // 预算/轮数护栏纯属挡路 → 一律 0=不限；行为护栏（空转/超时/重试）留正数防死循环。要改改下面的常量。
-// 密钥/代理/模型才走 loop.env（见 loadEnvFileOnce）。hasLimit(n)=n>0 让写死的值自洽：0=关、正数=开。
+// 密钥/代理/模型才走 swallow.env（见 loadEnvFileOnce）。hasLimit(n)=n>0 让写死的值自洽：0=关、正数=开。
 const UNLIMITED = 0;  // 0 表示不限；常量比较时用 hasLimit(n) = n > 0
 const hasLimit = (n: number) => n > 0;
 
@@ -79,7 +79,7 @@ const STOP_FILE = ".stop";              // .stop 哨兵：--stop 写，--watch �
 const LOCK_FILE = ".tick.lock";          // flock 进程级并发保护（防多 watch / 手动与 watch 并发）
 
 // 限额写死（不读环境变量）：token 不限量场景下，轮数护栏纯属挡路 → 一律 0=不限。
-// 行为护栏留正数防死循环（空转/超时/重试）。要改改这里的常量，不必改 loop.env。
+// 行为护栏留正数防死循环（空转/超时/重试）。要改改这里的常量，不必改 swallow.env。
 const MAX_TURNS_PER_TASK = UNLIMITED;        // 单任务 agentic 轮上限；0=不限（token 不限量）
 const STALL_LIMIT = 3;                       // 同任务连续零改动 N 次标阻塞
 const ABORT_TIMEOUT_MIN = 60;                // 单任务超 N 分钟无进展则 abort 重试
@@ -944,7 +944,7 @@ function loadProjectKnowledge(): string {
     parts.push("## CLAUDE.md（项目说明书）\n" + readFileSync("CLAUDE.md", "utf8"));
   }
   if (existsSync(MEMO_DIR)) {
-    // 累积记忆：架构/约定/模块边界等。跳过 progress.md（loop 自己写的增量流水账，对「怎么拆」没价值）。
+    // 累积记忆：架构/约定/模块边界等。跳过 progress.md（swallow 自己写的增量流水账，对「怎么拆」没价值）。
     let memos: string[] = [];
     try { memos = readdirSync(MEMO_DIR).filter((f) => f.endsWith(".md") && f !== "progress.md").sort(); }
     catch { memos = []; }
@@ -1173,7 +1173,7 @@ function parseArgs(argv: string[]): {
 
 function preflightEnv() {
   const key = process.env.ANTHROPIC_API_KEY;
-  const envFile = process.env.LOOP_ENV_FILE || `${homedir()}/.config/loop.env`;
+  const envFile = process.env.SWALLOW_ENV_FILE || `${homedir()}/.config/swallow.env`;
   if (key && key.trim() !== "") return;
   if (existsSync(envFile)) return;
   console.error(
@@ -1188,8 +1188,8 @@ function preflightEnv() {
 async function main() {
   const { goal, cwd, action } = parseArgs(process.argv.slice(2));
 
-  // --cwd > LOOP_PROJECT env > 当前目录。chdir 后产物/git/会话目录三者统一。
-  const targetCwd = cwd ? resolve(cwd) : (process.env.LOOP_PROJECT ? resolve(process.env.LOOP_PROJECT) : process.cwd());
+  // --cwd > SWALLOW_PROJECT env > 当前目录。chdir 后产物/git/会话目录三者统一。
+  const targetCwd = cwd ? resolve(cwd) : (process.env.SWALLOW_PROJECT ? resolve(process.env.SWALLOW_PROJECT) : process.cwd());
   if (!existsSync(targetCwd) || !statSync(targetCwd).isDirectory()) {
     console.error(`目标目录不存在或非目录: ${targetCwd}`);
     process.exit(1);
@@ -1209,7 +1209,7 @@ async function main() {
   // --watch 或裸跑
   if (action === "watch" || !action) {
     if (!goal && !existsSync(TASK_FILE)) {
-      console.error('首次运行需要指定目标，例如：\n  loop --cwd /path/to/project --watch "构建一个Go REST API"');
+      console.error('首次运行需要指定目标，例如：\n  swallow --cwd /path/to/project --watch "构建一个Go REST API"');
       process.exit(1);
     }
     const effectiveGoal = goal ?? (existsSync(STATE_FILE) ? readStateJson().goal : "");
