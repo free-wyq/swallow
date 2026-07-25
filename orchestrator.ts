@@ -791,11 +791,11 @@ async function tick(): Promise<TickOutcome> {
         log(`⚠️ 本轮非 success: subtype=${result.subtype} stop_reason=${result.stop_reason}`);
       }
       // 记录上轮上下文占用，供下轮健康度判定。
-      // ⚠️ input_tokens 不含 cache_read/cache_creation——原生 Anthropic 会低估真实上下文占用（大头在缓存命中）。
-      // ⚠️ GLM 代理若累计上报（1.44M 现象疑似此因），input_tokens 会是累计值、compact 后不重置，
-      //    可能导致下轮 last_input_tokens 被覆盖成大值 → 每轮 compact 死循环。待抓包确认代理行为。
-      // 下行诊断日志：跑真实任务时 night_run.log 会打出代理实际报的 usage 全字段，一眼看单轮(几万)还是累计(百万)。
-      // 抓包确认后视情况改：① 累计→健康度改用 getContextUsage().totalTokens；② compact 后别用下轮 usage 覆盖。
+      // 抓包确认（2026-07-25 真跑 13 轮，GLM 代理 192.168.241.10:3000 + glm-5.1）：
+      //   usage.input_tokens 是单轮上报（10万-22万波动，非百万累计）；
+      //   cache_creation/cache_read 恒 0（GLM 不报缓存命中，input_tokens 即真实单轮输入无低估）。
+      //   故 `state.last_input_tokens = inTok` 可信，无需改用 getContextUsage().totalTokens。
+      // 下行 usage 全字段日志：保留作可观测性诊断（非必需，但出问题时一眼看代理报了啥）。
       const usage = result.usage;
       if (usage) log(`📊 usage: ${JSON.stringify(usage)}`);
       const inTok = usage?.input_tokens;
