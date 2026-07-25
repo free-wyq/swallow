@@ -309,7 +309,7 @@ function buildPrompt(taskLine: string): string {
 1. 绝对不要向用户提问任何问题，不要等待确认。
 2. 执行任务过程中遇到任何选择或决策点，自己直接做决定，选最优解，不要询问用户。
 3. 如果进入计划模式，直接执行计划，不要等待批准。
-4. 如果检测到危险操作，低风险直接执行，高风险跳过并在 progress.md 说明原因。
+4. 如果检测到危险操作，低风险直接执行，高风险跳过（在 events.jsonl 会有记录）。
 5. 基于最佳实践自行推断，绝不索要额外信息。宁可基于合理假设推进，也不要停下来等。
 6. 遇到报错或失败，自己排查、自己修，不要向用户求助。
 
@@ -326,9 +326,8 @@ function buildPrompt(taskLine: string): string {
 ## 流程
 1. 【必做第一步·已完成检测】Read/Grep 检查目标文件是否已存在且实现完整。完整→直接结束本轮。不完整→继续。
 2. 读 .task.md 确认第一个未完成任务与上面一致。
-3. 读 .claude/memory/ 了解项目背景。
+3. 读 .claude/memory/ 了解项目背景（架构/约定/模块边界）。
 4. 执行任务（代码写到文件）。遇到决策点自己拍板。
-5. 更新 .claude/memory/progress.md。
 
 ## 上下文预算（防撑爆，尤其代理模型上下文有限）
 - 只读与当前任务直接相关的文件，不要扫全项目、不要批量 Read 源码树。
@@ -1189,9 +1188,9 @@ function loadProjectKnowledge(): string {
     parts.push("## CLAUDE.md（项目说明书）\n" + readFileSync("CLAUDE.md", "utf8"));
   }
   if (existsSync(MEMO_DIR)) {
-    // 累积记忆：架构/约定/模块边界等。跳过 progress.md（swallow 自己写的增量流水账，对「怎么拆」没价值）。
+    // 累积记忆：架构/约定/模块边界等（这是「已知」，直接喂进 prompt 当基线）。
     let memos: string[] = [];
-    try { memos = readdirSync(MEMO_DIR).filter((f) => f.endsWith(".md") && f !== "progress.md").sort(); }
+    try { memos = readdirSync(MEMO_DIR).filter((f) => f.endsWith(".md")).sort(); }
     catch { memos = []; }
     for (const f of memos) {
       try { parts.push(`## .claude/memory/${f}\n` + readFileSync(`${MEMO_DIR}/${f}`, "utf8")); }
