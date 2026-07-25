@@ -248,24 +248,36 @@ bootstrap 拆出来的任务可能仍然太大。三种常规做法都有问题�
 完整架构已在 1.3 展示，下面对焦死信队列分支：
 
 ```mermaid
-flowchart LR
-    RUN["runOneTask · query()"]
-    BOOT["bootstrap 拆任务"]
-    DLQ[("state.dead_letter<br/>死信队列")]
-    SPLIT["splitTask 拆子项"]
-    TICK["tick 继续推进"]
+flowchart TB
+    Start([用户 goal]) --> Bootstrap["① bootstrap 拆任务"]
+    Bootstrap --> Check1{"爆了吗?"}
+    Check1 -->|"❌ 不爆"| TaskFile[(".task.md 任务列表")]
+    Check1 -->|"💥 爆/截断"| EnG["入死信队列 type=goal"]
 
-    RUN -->|"ctx_overflow 达限"| DLQ
-    BOOT -->|"爆/截断"| DLQ
-    DLQ --> SPLIT
-    SPLIT -->|"子 task 插回 / 子 goal 独立 bootstrap"| TICK
+    TaskFile --> RunTask["② tick runOneTask"]
+    RunTask --> Check2{"爆了吗?"}
+    Check2 -->|"❌ 不爆·写了文件"| Commit["commit+打勾+下一任务"]
+    Commit --> TaskFile
+    Check2 -->|"⏱ aborted 超时"| Block["标 [~] 阻塞<br/>不拆（worker 卡死）"]
+    Check2 -->|"💥 ctx_overflow 达限"| Enqueue["入死信队列<br/>移除原任务行"]
 
-    style DLQ fill:#ffccbc,stroke:#bf360c
-    style SPLIT fill:#ffe0b2
+    Enqueue --> DLQ[("state.dead_letter")]
+    EnG --> DLQ
+    DLQ --> Split["splitTask 拆子项<br/>N 模型自决"]
+    Split --> Dispatch{"type?"}
+    Dispatch -->|"task"| Insert["子 task 插回 .task.md 当前位置<br/>父项立即移除队列<br/>dlq_split_count++"]
+    Dispatch -->|"goal"| Bootstrap2["子 goal 逐个独立 bootstrap<br/>拆成 task 列表写进 .task.md<br/>父项立即移除队列<br/>dlq_split_count++"]
+    Insert --> TaskFile
+    Bootstrap2 --> TaskFile
+
+    Split -->|"拆不出/自爆"| Fail1["进 failed_tasks"]
+    DLQ -.->|"dlq_split_count >= 30"| Fail2["队列清空进 failed_tasks<br/>watch 停"]
+    Fail1 --> FT[("state.failed_tasks")]
+    Fail2 --> FT
+    FT -.->|"failed_tasks >= 5"| Stop2["watch 停<br/>last_termination=dead_letter_exhausted"]
 ```
 
-task 型拆子任务插回 .task.md，goal 型拆子 goal 独立 bootstrap。
-两个兜底：`failed_tasks>=5`（拆不出的任务太多）或 `dlq_split_count>=30`（无限拆死循环），停 watch。
+图已包含完整链路：入队条件、出队拆解按 type 分流、两兜底（`failed_tasks>=5` 横向 / `dlq_split_count>=30` 纵向）。
 
 #### 2.4.3 设计对比
 
