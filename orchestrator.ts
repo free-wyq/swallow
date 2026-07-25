@@ -69,7 +69,6 @@ const hasLimit = (n: number) => n > 0;
 
 const TASK_FILE = ".task.md";
 const LOG_FILE = "night_run.log";
-const MEMO_DIR = ".claude/memory";
 const SESSION_FILE = ".session_id";      // session_id 单源（不进 state.json）
 const PID_FILE = ".pid";                // --watch 进程的 PID
 
@@ -313,11 +312,11 @@ function buildPrompt(taskLine: string): string {
 5. 基于最佳实践自行推断，绝不索要额外信息。宁可基于合理假设推进，也不要停下来等。
 6. 遇到报错或失败，自己排查、自己修，不要向用户求助。
 
-## 项目记忆索引（按需读，别全读）
-下方是本项目 .claude/memory/ 里已有的累积知识索引（每行一条：文件名 — 一句话摘要）。
-**只 Read 任务涉及的那块**，不要全读——大文件全读会撑爆上下文。
-任务和所有索引都不相关就跳过本节，直接干活。
-${formatMemoryIndex()}
+## 任务记忆沉淀与清理（每个 task 都过一遍）
+记忆是跨 task 复用的活知识，不是只读存档——做任务时顺手维护（项目记忆由引擎 auto-memory 自动管理读写，你按下方指引维护即可）：
+- **做完有新认知就沉淀**：本任务产生架构认知 / 踩坑 / 约定 / 模块边界发现 → 更新对应主题记忆文件（找不到对应主题就新建，命名 kebab-case）。已有相关记忆就更新那篇，别每 task 新建文件。
+- **读时发现过时就清理**：发现某条记忆和现状矛盾（库已换 / 模块已重构 / 约定已改）→ 当场更新或删掉，别让过时记忆误导后续 task。
+- **一行一个 fact，高密度，别写流水账**；琐碎实现（加函数、修 typo、格式化）不值得记，跳过——强记只会撑爆索引反噬上下文。
 
 ## 已完成检测（防假完成）
 「该任务对应的代码可能已存在」≠「已实现完整」。必须区分：
@@ -332,14 +331,15 @@ ${formatMemoryIndex()}
 ## 流程
 1. 【必做第一步·已完成检测】Read/Grep 检查目标文件是否已存在且实现完整。完整→直接结束本轮。不完整→继续。
 2. 读 .task.md 确认第一个未完成任务与上面一致。
-3. 看「项目记忆索引」里哪块和本任务相关 → Read 那个记忆文件了解背景（无关就跳过）。
+3. 项目记忆（auto-memory）由引擎自动注入，按需 Read 相关条目了解背景（无关就跳过）。
 4. 执行任务（代码写到文件）。遇到决策点自己拍板。
 
 ## 上下文预算（防撑爆，尤其代理模型上下文有限）
 - 只读与当前任务直接相关的文件，不要扫全项目、不要批量 Read 源码树。
-- 记忆按索引按需读全文，别全读——大文件全读会撑爆上下文。
+- 记忆按需读，别全读——大文件全读会撑爆上下文。
 - 大文件用 Grep 定位再按行 Read，别整文件打开。
 - 优先 grep/ls 验证再决定读不读，避免把无关文件灌进上下文。
+- 有高价值认知就维护记忆（见上方「任务记忆沉淀与清理」），别只读不写让记忆停滞。
 
 ## 规则
 - 一次只做一个任务。不要自己改 .task.md 勾选状态——打勾由外部脚本负责。
@@ -1186,52 +1186,14 @@ function surveyProjectTree(): string {
   return lines.slice(0, 300).join("\n") + (mf.length ? "\n\n" + mf.join("\n\n") : "");
 }
 
-// 读最高价值的现成知识喂给 bootstrap。CLAUDE.md（全文，项目说明书通常不大）→ memory 索引（不全读）。
+// 读最高价值的现成知识喂给 bootstrap：CLAUDE.md（项目说明书，全文，通常不大）。
 // 给完基线后不锁死——剩余细节模型按需自己探索（prompt 说明），而不是无脑全扫。
-// 记忆索引：扫 .claude/memory/*.md 取 frontmatter 的 name+description，拼成一行一条的索引。
-// worker（buildPrompt）和 bootstrap（loadProjectKnowledge）都喂索引不全读全文——对称，避免 bootstrap
-// 喂太满逼爆上下文（旧版 memory 全文逐个塞，几万字很快撞 20k 截断线，末尾被切反而误导）。
-// frontmatter 解析极简：只认 `^name:` 和 `^description:` 两个键，没有就退回用文件名。
-// 没记忆/没 .claude/memory → 返回「（…）」说明性文本（worker prompt 那节直接显示它）。
-function formatMemoryIndex(): string {
-  if (!existsSync(MEMO_DIR)) return "（项目无 .claude/memory/，跳过本节）";
-  let files: string[] = [];
-  try { files = readdirSync(MEMO_DIR).filter((f) => f.endsWith(".md")).sort(); }
-  catch { return "（项目无 .claude/memory/，跳过本节）"; }
-  if (files.length === 0) return "（无累积记忆，跳过本节）";
-  const lines: string[] = [];
-  for (const f of files) {
-    let name = f.replace(/\.md$/, "");
-    let desc = "";
-    try {
-      const text = readFileSync(`${MEMO_DIR}/${f}`, "utf8");
-      // 只解析首个 frontmatter 块（--- ... ---）
-      const fm = text.match(/^---\n([\s\S]*?)\n---/);
-      if (fm) {
-        const n = fm[1].match(/^name:\s*(.+)$/m);
-        const d = fm[1].match(/^description:\s*(.+)$/m);
-        if (n) name = n[1].trim();
-        if (d) desc = d[1].trim();
-      }
-    } catch { /* 读取失败用文件名兜底 */ }
-    lines.push(`- .claude/memory/${f} — ${desc || name}`);
-  }
-  return lines.join("\n");
-}
-
+// 项目记忆（auto-memory）由引擎 query() 自动注入（system-reminder 形式，和 CLI 同份），
+// swallow 不显式喂——避免重复占上下文（防爆），且 worker 能自然看到。
 function loadProjectKnowledge(): string {
   const parts: string[] = [];
   if (existsSync("CLAUDE.md")) {
     parts.push("## CLAUDE.md（项目说明书）\n" + readFileSync("CLAUDE.md", "utf8"));
-  }
-  if (existsSync(MEMO_DIR)) {
-    // memory 索引（同 worker buildPrompt）：只喂一行一条的 name+description，不全文逐个读。
-    // 拆任务时按需 Read 相关文件——和 worker 完全对称，避免 bootstrap 喂太满逼爆上下文。
-    // formatMemoryIndex 无 memory 时返回「（…）」说明性文本，parts 不重复 push（前面 existsSync 已保证有目录）。
-    const idx = formatMemoryIndex();
-    if (!idx.startsWith("（")) {
-      parts.push("## 项目记忆索引（按需读，别全读）\n下方是 .claude/memory/ 已有累积知识索引（每行一条：文件名 — 一句话摘要）。拆任务时如果某块和目标相关，Read 那个记忆文件了解背景再拆；无关就跳过，别全读。\n" + idx);
-    }
   }
   if (parts.length === 0) {
     // 真新工程/没用过 claude code → 退路：代码轻量勘察当探索起点
@@ -1591,8 +1553,6 @@ async function main() {
     process.exit(1);
   }
   process.chdir(targetCwd);
-
-  mkdirSync(MEMO_DIR, { recursive: true });
 
   // 预检仅对起 query 的动作（--watch/裸跑）做；只读/操控动作不挡。
   if (action === "watch" || !action) preflightEnv();
