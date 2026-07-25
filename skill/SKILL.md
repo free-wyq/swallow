@@ -80,9 +80,11 @@ swallow --cwd <项目> --resume     # 恢复（删 .stop）
 
 每行一个事件：`{"ts":"...","type":"task_completed","tick_id":"...","loop_count":15,"data":{...}}`
 
-事件类型：`tick_started` / `tick_completed` / `task_completed` / `task_stall` / `task_blocked` / `session_dropped` / `aborted` / `done` / `suspected_false_completion` / `compact_probe_ok` / `compact_probe_failed` / `task_to_dlq` / `bootstrap_to_dlq` / `task_split` / `task_failed` / `dead_letter_exhausted` 等。
+事件类型：`tick_started` / `tick_completed` / `tick_skipped`（已终止/已锁，跳过） / `tick_locked`（拿锁，并发 watch 第二个触发） / `bootstrap_completed` / `task_completed` / `task_stall` / `task_blocked` / `session_created` / `session_resumed` / `session_dropped` / `aborted` / `done` / `suspected_false_completion` / `compact_probe_ok` / `compact_probe_failed` / `task_to_dlq` / `bootstrap_to_dlq` / `task_split` / `task_failed` / `dead_letter_exhausted` 等。
 
 **判崩溃**：`tick_started` 无同 `tick_id` 的 `tick_completed` = 该 tick 崩溃。
+**判并发冲突**：出现 `tick_locked` 说明第二个 watch 试图启动（已被锁挡掉，正常）。
+**判已终止空转**：重启后若立刻 `tick_skipped`，多半是 `last_termination` 还在挡（见「已知行为」）。
 
 ### .task.md（进度真相源）
 
@@ -90,7 +92,7 @@ swallow --cwd <项目> --resume     # 恢复（删 .stop）
 
 ## 发战报
 
-起定时任务读上述文件，按你的判断组织战报。参考格式（非强制）：
+起定时任务读上述文件，按你的判断组织战报。推荐用 `swallow --cwd <项目> --status --json` —— 它已把 state.json + .task.md + events 末尾 + watch 进程汇总成单一 JSON（含 `dead_letter` 块：`queue_len`/`dlq_split_count`/`dlq_split_limit`/`failed_count`/`failed_task_limit`/`queue`/`failed`），跨平台零依赖，不必自己解析 state.json。⚠️ 解析数字字段时若跑在带 `FORCE_COLOR` 的环境，用 `env -u FORCE_COLOR` 或读 `JSON.parse` 后取值，别比较原始 stdout（node 会给数字加 ANSI 色污染断言）。参考格式（非强制）：
 
 ```
 📊 swallow 战报 20:38
@@ -104,7 +106,7 @@ swallow --cwd <项目> --resume     # 恢复（删 .stop）
 🧹 上下文压缩（/compact deep 压缩成功）：81663 → 2611 tokens（压掉 79K，压缩至 3.2%·约 1/31）
 ```
 
-字段映射：轮数→`loop_count`、剩余/进度→`.task.md`、心跳→`last_heartbeat_at`、空转→`stall_count`、压缩→`compact_probe_ok` 事件。`当前操作`、`启动时间`等细粒度项 swallow 无专字段——从 events 末尾事件 / night_run.log 自行推断。
+字段映射：轮数→`loop_count`、剩余/进度→`.task.md`、心跳→`last_heartbeat_at`、空转→`stall_count`、压缩→`compact_probe_ok` 事件、死信拆分→`dead_letter` 块（`queue_len`/`dlq_split_count`/`failed_count`）。`当前操作`、`启动时间`等细粒度项 swallow 无专字段——从 events 末尾事件 / night_run.log 自行推断。
 
 **压缩行数据源（`compact_probe_ok` 事件）**：`pre`（压缩前 token）/ `post`（压缩后 token）同源同量纲成对可比，直接算 `freed = pre - post`（压缩量）、`compress_ratio = post / pre`（压缩比）。⚠️ 这俩是**单次压缩的成对前后值**，别和 `/compact` 命令界面显示的「会话累计流经 1.44M → 当前 1 万」混了——后者 `before` 是会话累计（17 轮累加、量纲不同、不可比压缩比），swallow 探针的 `pre` 是单轮值（≤模型窗口）。两者别放一起比。
 
@@ -143,3 +145,8 @@ cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow.env && chmod 600
 - **项目已 done 后跑新缺陷**：直接重启会被 `state.json` 的 `last_termination={reason:"done"}` 挡掉（tick 直接 already_terminated 跳过）。要继续跑，清掉 `state.json` 的 `last_termination` 字段（置 `null`）或换新 goal 触发重新 bootstrap。`dead_letter_exhausted` 同理（兜底停了 watch，清该字段或换 goal 才能重启）。
 - **撞 blocked_suspect 先看探针**：`status=blocked_suspect`（疑假完成）或 `ctx_overflow_retry` 频繁时，查 events.jsonl 有没有 `compact_probe_ok`——有探针压成功说明 ctx 在自我回收；没有就是真撞墙，多半是目标项目上下文太大，可在项目根放 `.claudeignore` 压扫描范围。
 - **死信队列兜底停**：`last_termination=dead_letter_exhausted` 说明任务大到连拆都拆不动（横向 5 个不同 task 各自拆不出 / 纵向拆 30 次还在拆 = 子任务互相依赖死循环）。查 events 的 `task_split` 链看是哪个 task 反复爆，人工拆解或换更小 goal。详见 [docs/dead-letter-design.md](../docs/dead-letter-design.md)。
+- **死信队列在拆分中**：`--status` 见 `dead_letter.queue_len > 0` 属正常（task 太大一个会话装不下，正在 `splitTask` 拆子项回插）。关注 `dlq_split_count` 接近 30（纵向死循环将至）或 `failed_count` 涨（横向拆不出在累积）——这两个接近上限就是兜底将至的前兆。
+
+## 可观测性
+
+整个工程的信号体系（不止死信队列）见 [docs/observability.md](../docs/observability.md)：三层可观测面（events / state / `--status --json`）+ 8 类信号维度（tick 生命周期 / 任务进度 / 会话健康 / ctx 探针 / watch 存活 / 终止 / events 轮转 / 死信队列）+ 外部 agent 监控契约（哪些信号 → 检测方法 → 严重度）。
