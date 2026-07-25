@@ -15,8 +15,6 @@ swallow 自驱推进开发任务、把结果结构化落盘，**不发战报、�
 
 推进靠 `--watch` 长进程，崩了重启续跑（重启后从 `state.json` 恢复点继续，不丢进度、不重复打勾）。
 
-推进靠 `--watch` 长进程，崩了重启续跑（重启后从 `state.json` 恢复点继续，不丢进度、不重复打勾）。
-
 > 没装好先看 [install.md](../install.md)（装好 → 注册进你的 skills 目录 → 配密钥）。本文只讲怎么用、怎么看状态、怎么发战报。
 
 ## 用法
@@ -90,7 +88,20 @@ swallow --cwd <项目> --resume     # 恢复（删 .stop）
 🧹 上下文压缩（/compact deep 压缩成功）：81663 → 2611 tokens（压掉 79K，压缩至 3.2%·约 1/31）
 ```
 
-字段映射：轮数→`loop_count`、剩余/进度→`.task.md`、心跳→`last_heartbeat_at`、空转→`stall_count`、压缩→`compact_probe_ok` 事件、死信拆分→`dead_letter` 块（`queue_len`/`dlq_split_count`/`failed_count`）。`当前操作`、`启动时间`等细粒度项 swallow 无专字段——从 events 末尾事件 / night_run.log 自行推断。
+**死信/失败行（条件显示，常态空不刷屏）**——死信队列或真失败册非空时才加这两行；都空就别发：
+
+```
+♻️ 死信拆分中：2 项待拆（已拆 5/30 次，接近上限将兜底停）
+🚫 真失败：1 项拆不动需人工核实（累计 1/5）
+```
+
+**兜底停告警（`last_termination.reason=dead_letter_exhausted` 时置顶）**——watch 已停，需人工介入，别当正常进度报：
+
+```
+🛑 死信兜底停：横向 5 项拆不出 / 纵向拆 30 次仍在拆 → 需人工拆解或换更小 goal
+```
+
+字段映射：轮数→`loop_count`、剩余/进度→`.task.md`、心跳→`last_heartbeat_at`、空转→`stall_count`、压缩→`compact_probe_ok` 事件、**死信拆分→`dead_letter.queue_len`/`dlq_split_count`/`dlq_split_limit`、真失败→`dead_letter.failed_count`/`failed_task_limit`、兜底停→`last_termination.reason=dead_letter_exhausted`**。`当前操作`、`启动时间`等细粒度项 swallow 无专字段——从 events 末尾事件 / night_run.log 自行推断。
 
 **压缩行数据源（`compact_probe_ok` 事件）**：`pre`（压缩前 token）/ `post`（压缩后 token）同源同量纲成对可比，直接算 `freed = pre - post`（压缩量）、`compress_ratio = post / pre`（压缩比）。⚠️ 这俩是**单次压缩的成对前后值**，别和 `/compact` 命令界面显示的「会话累计流经 1.44M → 当前 1 万」混了——后者 `before` 是会话累计（17 轮累加、量纲不同、不可比压缩比），swallow 探针的 `pre` 是单轮值（≤模型窗口）。两者别放一起比。
 
