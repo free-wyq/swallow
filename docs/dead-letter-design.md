@@ -58,7 +58,7 @@ flowchart TB
     EnG --> Item
     EnT --> Item
 
-    Item --> Split["splitTask query<br/>拆 2-4 子项"]
+    Item --> Split["splitTask query<br/>拆 N 子项（N 模型自决）"]
 
     Split -->|"type=goal"| SubG["子 goal → 独立 bootstrap<br/>新会话·不背历史"]
     Split -->|"type=task"| SubT["子 task → 插回 .task.md<br/>当前位置·保依赖顺序"]
@@ -69,71 +69,6 @@ flowchart TB
     Split -->|"depth > 上限"| Fail["真失败·人工介入"]
     Commit -->|"所有子完成"| Remove["父从队列移除"]
     Remove --> Item
-```
-
-### ASCII（终端可读）
-
-```
-                    用户 goal
-                        │
-                        ▼
-        ┌───────────────────────────────┐
-        │  ① bootstrap：拆任务 query     │
-        └───────────────┬───────────────┘
-                        │
-                   爆了吗?
-              ┌─────────┴─────────┐
-            不爆                  爆（ctx_overflow / 截断）
-              │                    │
-              ▼                    ▼
-        .task.md 任务列表      ┌──────────────┐
-              │                 │ 入死信队列    │ type=goal
-              ▼                 └──────────────┘
-        ┌─────────────────────┐
-        │ ② tick：runOneTask  │
-        │    干活 query       │
-        └──────────┬──────────┘
-                   │
-              爆了吗?
-        ┌─────────┼──────────┐
-      不爆    ctx_overflow   aborted（超时）
-        │         │            │
-        ▼         ▼            ▼
-    commit     入死信队列     标 [~] 阻塞
-    打勾       type=task     （不拆，worker 卡死）
-    下一任务     │
-        │         │
-        └────┬────┘
-             ▼
-    ┌──────────────────────┐
-    │ 死信队列               │
-    │ state.dead_letter     │
-    │ {type, content, reason,│
-    │  depth, ts}           │
-    └──────────┬───────────┘
-               │
-               ▼
-        splitTask query
-        拆 2-4 子项
-               │
-        ┌──────┴──────┐
-        │             │
-    type=goal     type=task
-        │             │
-        ▼             ▼
-  子 goal 独立   子 task 插回 .task.md
-  bootstrap     当前位置
-  （新会话）     （保依赖顺序）
-        │             │
-        └──┬──────────┘
-           │
-      depth > 上限?
-       ┌───┴───┐
-      否       是
-       │       │
-   回到 ①/②  真失败·人工介入
-       │
-   所有子完成 → 父从队列移除
 ```
 
 ## 4. 数据结构
@@ -176,13 +111,16 @@ swallow 现有三个 query 调用点，本设计加第四个 `splitTask`：
 | `bootstrapTasks` | 拆任务 | 否（无 session） | 无 | 已有 |
 | `runOneTask` | 干活 | 是（resume 同会话） | 全 hook | 已有 |
 | `probeCompactDeep` | ctx 探针 | 是（监听 compact_boundary） | 无 | 已有 |
-| **`splitTask`**（新增） | 把爆掉的项拆 2-4 子项 | 否（新会话） | 无 | **本设计加** |
+| **`splitTask`**（新增） | 把爆掉的项拆成 N 个子项（N 不固定，模型自决） | 否（新会话） | 无 | **本设计加** |
 
 `splitTask` 输入 `DeadLetterItem`，输出子项列表：
 
 ```typescript
 async function splitTask(item: DeadLetterItem): Promise<string[]> {
-  // prompt：把这个 {goal/task} 拆成 2-4 个独立、可单独完成的子项
+  // prompt：把这个 {goal/task} 拆成若干个独立、可单独完成的子项。
+  // ⚠️ 子项数量不固定、完全由模型自决——大任务可能拆 5+ 个、小任务可能只拆 2 个。
+  //    不限制数量：拆少了还爆就再拆（反馈驱动），拆多了能装下就行。
+  //    唯一约束是「每个子项要能在单个会话内独立完成」（同 bootstrap 小任务约束），数量交给模型判断。
   // 输出格式同 bootstrap：- [ ] 子项描述
   // 拿到子项后，caller 按 item.type 决定插到哪：
   //   goal → 独立 bootstrap 流（子 goal 入队等下次 watch 跑 / 直接拆到 .task.md？见 §6 决策点）
@@ -283,7 +221,7 @@ if (state.dead_letter.length > 0) {
     writeStateJsonAtomic(state);
     continue;
   }
-  const children = await splitTask(item);   // 拆 2-4 子项
+  const children = await splitTask(item);   // 拆 N 子项（N 模型自决，大任务可能 5+、小任务可能 2）
   if (children.length === 0) {
     // 拆分 query 自己也爆 / 拆不出 → 进死信队列不无限重试拆
     log(`⚠️ splitTask 拆失败（可能自爆），${item.content} 进真失败`);
@@ -321,13 +259,62 @@ if (state.dead_letter.length > 0) {
 
 **简化**：MVP 可不做父子联动，直接"父拆出子就移出队列、子独立推进"——代价是失去"父任务整体失败检测"，但简单。先 MVP 后加。
 
-## 8. 三个死循环兜底
+## 8. 兜底（三个防死循环 + 两个真失败收场）
+
+### 8.1 防死循环（三个）
 
 | 风险 | 兜底 |
 |---|---|
-| splitTask query 自己也爆 | 拆失败（`children.length===0`）直接进真失败，不无限重试拆 |
-| 无限拆分（子任务 A↔B 互相依赖，永远拆不出独立可完成的） | `SPLIT_DEPTH_LIMIT`（建议 3）硬上限，超了真失败人工介入 |
+| splitTask query 自己也爆 | 拆失败（`children.length===0`）直接进真失败册，不无限重试拆 |
+| 无限拆分（子任务 A↔B 互相依赖，永远拆不出独立可完成的） | `SPLIT_DEPTH_LIMIT`（建议 3）硬上限，超了进真失败册 |
 | "一次不爆≠稳定"（这轮 compact 压下去没爆，下轮又涨上来爆） | 固有简化，暂接受。didRealWork 看写文件判"过"的局限要知道——拆分依赖它，但这是现有机制，不在本设计范围改 |
+
+### 8.2 真失败收场（两个，补"拆到底还失败，任务去哪"的缺口）
+
+现有兜底只到"从死信队列移出 + 发 `task_failed` 事件"——但事件会随 events.jsonl 5000 行轮转丢明细，任务承认做不了却没地方登记，人工看不到。补两环：
+
+**① 真失败登记册（持久化，不止事件）**
+
+加 `state.failed_tasks: DeadLetterItem[]`——跟死信队列同结构同模式，但**终态**（只进不出，不轮转不丢失）：
+
+```
+死信队列 state.dead_letter   ← 暂态（待拆/拆中），会出队
+真失败册 state.failed_tasks  ← 终态（拆到底做不了），只进不出
+```
+
+- 拆到深度上限 / splitTask 自爆 → 从死信队列移出 → **进 `failed_tasks`**（不是只发事件）
+- `--status` 显示「❌ 真失败 N 个：任务1、任务2...」
+- 人工看 `--status` 就知道 swallow 尽力了哪些做不了
+
+为什么用新数组而非 .task.md 加第四种勾 `[!]`：`.task.md` 的 `[~]` 是"暂时跳过可恢复"，真失败是"永久做不了"，语义不同不该混；且 failed_tasks 是终态汇总，本就该和进度（.task.md）分开。
+
+**② 整体终态（失败累计停 watch）**
+
+单个任务真失败不该直接停整个 goal（其他任务可能不依赖它）。但累计真失败超阈值 → 这个 goal 对当前模型太大/太碎，继续跑也是浪费：
+
+- `failed_tasks.length >= FAILED_TASK_LIMIT`（绝对数，建议 5）→ watch 退出，标 `last_termination={reason:"dead_letter_exhausted"}`，人工介入
+- 否则继续推进其他任务，最后 done 时汇总
+
+为什么用绝对数而非比例：简单。失败本该低频，5 个够触发人工介入；任务总数少时绝对数略激进，但总比"比例阈值算总数 + 越界"复杂度低。MVP 先绝对数，真不合适再调。
+
+### 8.3 拆到底失败的完整链条（补齐后）
+
+```
+task A 爆 → 死信队列 depth=0
+  splitTask → A1 A2 A3 (depth=1) 插回 .task.md
+    A1 爆 → 死信队列 depth=1
+      splitTask → A1a A1b (depth=2)
+        A1a 爆 → 死信队列 depth=2
+          splitTask → ... (depth=3)
+            子项又爆 → 死信队列 depth=3
+              tick 入口: depth >= 3
+                → 从死信队列移出
+                → 进 failed_tasks（真失败册）        ← 新增 ①
+                → task_failed 事件
+              failed_tasks 累计 >= 5
+                → watch 退出, last_termination={reason:"dead_letter_exhausted"}  ← 新增 ②
+                → 人工介入
+```
 
 ## 9. 新增事件类型（events.jsonl）
 
@@ -337,14 +324,15 @@ if (state.dead_letter.length > 0) {
 | `bootstrap_to_dlq` | bootstrap 爆/截断入死信队列 | `{goal, reason, partial_count}` |
 | `task_split` | splitTask 拆出子项 | `{parent_content, child_count, depth, type}` |
 | `task_failed` | 拆到深度上限仍爆 / splitTask 自爆 | `{content, reason: "split_depth_exceeded"\|"split_failed"}` |
+| `dead_letter_exhausted` | 真失败累计达 `FAILED_TASK_LIMIT`，watch 退出 | `{failed_count, limit}` |
 | `parent_resolved` | 父项子全完成移除（MVP 后） | `{parent_content, child_count}` |
 
-`--status` 加显示死信队列长度 + 真失败数。
+`--status` 加显示死信队列长度 + 真失败册（`failed_tasks` 内容摘要，不只计数——人工要看到哪些任务做不了）。
 
 ## 10. 不做（边界）
 
 - **不预先递归**：不在 bootstrap 时猜哪些任务大、提前拆树。只爆了才拆——这是本设计与 Layer 3 预先递归的根本区别（消掉"深度判断"冲突）。
-- **不改 .task.md 格式**：不引入树形结构（`.tasktree.json` 之类）。子 task 就是普通 `- [ ]` 行插回 flat 列表，state.json 不感知层级——靠 `parent_id` 软追踪。
+- **不改 .task.md 格式**：不引入树形结构（`.tasktree.json` 之类）。子 task 就是普通 `- [ ]` 行插回 flat 列表，state.json 不感知层级——靠 `parent_id` 软追踪。真失败也不用 `.task.md` 第四种勾 `[!]`——进 `state.failed_tasks`，语义与进度分离。
 - **不动 runOneTask 内核**：query + PostToolUse hook + 看门狗不变，只在它出口加"爆了入队"分支。
 - **不解决 aborted**：看门狗超时（worker 卡死）继续走老 block，不拆。
 - **不做跨子任务协调**：子 task 插回当前位置靠顺序缓解兄弟协调，不做依赖声明语言。
@@ -364,15 +352,16 @@ Layer 3 只在 Layer 0/1/2 都压不住、真撞 ctx_overflow 截断时触发。
 
 ## 12. 实现顺序（真上时）
 
-1. 加 `DeadLetterItem` interface + `state.dead_letter` 字段 + `DEFAULT_STATE` + `readStateJson` 兼容。
-2. 加 `enqueueDeadLetter` / `shiftDeadLetter` / 死信队列读写 helper。
-3. bootstrap 截断检测（sentinel）+ ctx_overflow 检测 → 爆了入队（`bootstrapTasks` 改）。
-4. tick L811 分流 aborted/ctx_overflow → ctx_overflow 达限入队（`tick` 改）。
-5. 加 `splitTask` query 调用点。
-6. tick 入口 / watch 循环加死信队列出队处理（splitTask + 按 type 分流）。
-7. 加事件类型 + `--status` 显示。
-8. 父子语义闭环（MVP 后做）。
-9. e2e：构造爆掉的场景（故意喂超大 goal / 超大 task）验证拆分链路。
+1. 加 `DeadLetterItem` interface + `state.dead_letter` + `state.failed_tasks` 字段 + `DEFAULT_STATE` + `readStateJson` 兼容（自动向前，旧 state 缺字段补默认）。
+2. 加 `enqueueDeadLetter` / `shiftDeadLetter` / `moveToFailed`（死信队列 ↔ 真失败册）helper + `removeFirst` / `insertTasksBeforeFirst`（.task.md helper，照 `tickFirst` 骨架 splice）。
+3. bootstrap 截断检测（sentinel `<!-- END_OF_TASKS -->`）+ ctx_overflow 检测 → 爆了入死信队列（`bootstrapTasks` 改，不 `process.exit(1)`）。
+4. tick L811 分流 aborted/ctx_overflow → ctx_overflow 达限入死信队列（`tick` 改，替代原 `blockFirst()`）。
+5. 加 `splitTask` query 调用点（照 `bootstrapTasks` 模式，新会话不 resume，输出解析照抄 `text.split("\n").filter((l) => /^- \[ \]/.test(l))`）。
+6. tick 入口加死信队列出队处理（splitTask + 按 type 分流）：`split_depth >= SPLIT_DEPTH_LIMIT` 或 splitTask 自爆 → `moveToFailed`（进真失败册）+ `task_failed` 事件。
+7. 真失败累计 `failed_tasks.length >= FAILED_TASK_LIMIT` → watch 退出 + `last_termination={reason:"dead_letter_exhausted"}` + `dead_letter_exhausted` 事件。
+8. 加事件类型 + `--status` 显示死信队列长度 + 真失败册内容摘要。
+9. 父子语义闭环（MVP 后做）。
+10. e2e：构造爆掉的场景（故意喂超大 goal / 超大 task）验证拆分链路 + 真失败收场。
 
 ## 13. 重启条件（暂不上）
 
