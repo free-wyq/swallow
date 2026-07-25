@@ -200,9 +200,9 @@ swallow --cwd /path/to/project "构建一个 Go REST API"
 
 战报怎么发是独立工作，orchestrator 本身不改、也不掺和。接入实战（拉起 + 定时战报 + 微信推送）见 [docs/hermes-guide.md](docs/hermes-guide.md) / [docs/claude-code-guide.md](docs/claude-code-guide.md)。
 
-## 注册成 skill（可选，agent 自行推理）
+## 注册成 skill（让 agent 会用 swallow）
 
-`skill/` 是一个可被 agent 加载的 skill（含 `SKILL.md`）。多数 agent 的 skill 扫描器用 find/glob 遍历 skills 目录、**默认不跟符号链接进子目录**——symlink 进去的 skill 扫描器看不见。所以注册时**拷成真目录**而非 symlink：
+`skill/` 是一个可被 agent 加载的 skill（含 `SKILL.md`），是 agent 调度 swallow 的入口。**用 swallow 前必须注册进你要用的 agent。** 多数 agent 的 skill 扫描器用 find/glob 遍历 skills 目录、**默认不跟符号链接进子目录**——symlink 进去的 skill 扫描器看不见。所以注册时**拷成真目录**而非 symlink：
 
 ```bash
 # 推理你 agent 的 skills 目录（常见：~/.claude/skills · ~/.codex/skills · ~/.gemini/skills · ~/.cursor/skills · ~/.hermes/skills）

@@ -43,7 +43,7 @@ Claude Code 在 swallow 体系里只干两件事：**任务执行**（拉起 swa
 
 把这条发给 Claude Code：
 
-> 在 `<项目>` 跑 swallow，目标「把缺陷表里失败的项全修了」，后台跑、日志写到 night_run.log。
+> 在 `<项目>` 跑 swallow，目标「把缺陷表里失败的项全修了」，后台跑。
 
 Claude Code 用 Bash 工具拉起 `swallow --cwd <项目> "目标"`。swallow `--watch` 自驱：自己拆任务 → 逐个推进 → 每轮 commit。崩了能从 state.json 续跑（不丢进度、不重复打勾）。
 

@@ -46,9 +46,9 @@ flowchart TB
 
 把这条发给 Hermes：
 
-> 在 `<项目>` 跑 swallow，目标「把缺陷表里失败的项全修了」，输出 tee 到 night_run.log。
+> 在 `<项目>` 跑 swallow，目标「把缺陷表里失败的项全修了」。
 
-swallow --watch 自驱：自己拆任务 → 逐个推进 → 每轮 commit。崩了能从 state.json 续跑（不丢进度、不重复打勾）。
+swallow --watch 自驱：自己拆任务 → 逐个推进 → 每轮 commit。崩了能从 state.json 续跑（不丢进度、不重复打勾）。运行日志自动写进 `<项目>/night_run.log`（swallow 自己写，不用 tee）。
 
 拉起/守护 swallow 是你（或让 Hermes 帮你配 systemd `Restart=always`）的事，**不是 Hermes 战报的职责**——定时战报只读结果、不干预推进。
 
@@ -83,7 +83,7 @@ swallow 把结果结构化落盘（`state.json` 恢复点 / `events.jsonl` 审�
 
 ⚠️ [异常标注：空转/阻塞/报错/崩溃才显示，无异常则不显示此行]
 
-要求：swallow 命令已配好 ~/.config/swallow.env，直接跑 swallow --status 即可，别 export 环境变量、别 source ~/.bashrc；启动时间从 night_run.log 第一行的 orchestrator 启动时间提取；心跳从 state.json 的 last_heartbeat_at 读；已完成的任务用「已完成」不用「已修复」；消息里每个字段单独一行、字段间空一行，简洁一目了然。
+要求：swallow 命令已配好 ~/.config/swallow.env，直接跑 swallow --status 即可，别 export 环境变量、别 source ~/.bashrc；启动时间从 night_run.log 第一行的 orchestrator 启动时间提取（swallow 自己写该日志）；心跳从 state.json 的 last_heartbeat_at 读；已完成的任务用「已完成」不用「已修复」；消息里每个字段单独一行、字段间空一行，简洁一目了然。
 ```
 
 ### 2.2 每日晨报
@@ -91,7 +91,7 @@ swallow 把结果结构化落盘（`state.json` 恢复点 / `events.jsonl` 审�
 > 建一个每天 9 点的企业微信定时任务，生成 `<项目>` 的晨报：
 > 1. 跑 swallow --status 获取状态
 > 2. 读 .task.md 统计任务完成情况（已完成 [x] / 未完成 [ ] / 阻塞 [~] / 总数）
-> 3. 读 night_run.log 末尾 50 行获取最近执行情况
+> 3. 读 night_run.log 末尾 50 行获取最近执行情况（swallow 自己写的运行日志）
 > 4. 读 state.json 的 loop_count、status、event_counts 字段
 > 5. 读 events.jsonl 末尾 20 行，提取 task_completed / task_blocked / aborted / done 等关键事件
 > 6. 跑 git log --oneline -20 --since=yesterday 检查代码提交

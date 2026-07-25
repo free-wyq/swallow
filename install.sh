@@ -124,7 +124,7 @@ exec "'"$DEST"'/node_modules/.bin/tsx" "'"$DEST"'/orchestrator.ts" "$@"
   echo "  战报/推送：orchestrator 只把结果结构化到 state.json/events.jsonl，"
   echo "  由外部 agent 读这些结果自行组织发送，orchestrator 不发战报。"
   echo
-  echo "  注册 skill（可选；多数 agent 的扫描器不跟 symlink，要拷真目录）："
+  echo "  注册 skill（必须——agent 调度 swallow 的入口；多数 agent 的扫描器不跟 symlink，要拷真目录）："
   echo "    cp -r $DEST/skill ~/.claude/skills/swallow-scheduler   # Claude Code（换 agent 换目录）"
   echo "  卸载时清理该 agent 的 skill 拷贝：export SWALLOW_SKILL_DIRS=<skills-dir> 后再 uninstall"
   echo "  卸载：bash $DEST/install.sh uninstall"

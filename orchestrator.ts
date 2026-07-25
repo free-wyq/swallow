@@ -1186,12 +1186,13 @@ function surveyProjectTree(): string {
   return lines.slice(0, 300).join("\n") + (mf.length ? "\n\n" + mf.join("\n\n") : "");
 }
 
-// 读最高价值的现成知识喂给 bootstrap。CLAUDE.md → memory 累积记忆（这是「已知」，直接给）。
+// 读最高价值的现成知识喂给 bootstrap。CLAUDE.md（全文，项目说明书通常不大）→ memory 索引（不全读）。
 // 给完基线后不锁死——剩余细节模型按需自己探索（prompt 说明），而不是无脑全扫。
 // 记忆索引：扫 .claude/memory/*.md 取 frontmatter 的 name+description，拼成一行一条的索引。
-// 给 worker prompt 用——worker 看索引知道有什么知识存在，按需 Read 那个文件，不全读（防爆）。
+// worker（buildPrompt）和 bootstrap（loadProjectKnowledge）都喂索引不全读全文——对称，避免 bootstrap
+// 喂太满逼爆上下文（旧版 memory 全文逐个塞，几万字很快撞 20k 截断线，末尾被切反而误导）。
 // frontmatter 解析极简：只认 `^name:` 和 `^description:` 两个键，没有就退回用文件名。
-// 没记忆/没 .claude/memory → 返回空串（prompt 里那节就显示"（无累积记忆）"）。
+// 没记忆/没 .claude/memory → 返回「（…）」说明性文本（worker prompt 那节直接显示它）。
 function formatMemoryIndex(): string {
   if (!existsSync(MEMO_DIR)) return "（项目无 .claude/memory/，跳过本节）";
   let files: string[] = [];
@@ -1224,13 +1225,12 @@ function loadProjectKnowledge(): string {
     parts.push("## CLAUDE.md（项目说明书）\n" + readFileSync("CLAUDE.md", "utf8"));
   }
   if (existsSync(MEMO_DIR)) {
-    // 累积记忆：架构/约定/模块边界等（这是「已知」，直接喂进 prompt 当基线）。
-    let memos: string[] = [];
-    try { memos = readdirSync(MEMO_DIR).filter((f) => f.endsWith(".md")).sort(); }
-    catch { memos = []; }
-    for (const f of memos) {
-      try { parts.push(`## .claude/memory/${f}\n` + readFileSync(`${MEMO_DIR}/${f}`, "utf8")); }
-      catch { /* skip */ }
+    // memory 索引（同 worker buildPrompt）：只喂一行一条的 name+description，不全文逐个读。
+    // 拆任务时按需 Read 相关文件——和 worker 完全对称，避免 bootstrap 喂太满逼爆上下文。
+    // formatMemoryIndex 无 memory 时返回「（…）」说明性文本，parts 不重复 push（前面 existsSync 已保证有目录）。
+    const idx = formatMemoryIndex();
+    if (!idx.startsWith("（")) {
+      parts.push("## 项目记忆索引（按需读，别全读）\n下方是 .claude/memory/ 已有累积知识索引（每行一条：文件名 — 一句话摘要）。拆任务时如果某块和目标相关，Read 那个记忆文件了解背景再拆；无关就跳过，别全读。\n" + idx);
     }
   }
   if (parts.length === 0) {

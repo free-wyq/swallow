@@ -77,21 +77,9 @@ chmod 600 ~/.config/swallow.env   # 密钥别让别的用户读到
 
 要改限额改 `orchestrator.ts` 顶部这几行（`0=不限`，`hasLimit(n)=n>0` 自洽），不用动 swallow.env。行为护栏（`STALL_LIMIT` 起往后留正数防死循环；死信两兜底 `FAILED_TASK_LIMIT`/`DLQ_SPLIT_LIMIT` 横纵分工，详见 [docs/dead-letter-design.md](docs/dead-letter-design.md)）。预算护栏已随成本追踪一并移除（token 不限量场景下无意义）。ctx 健康度探针是主动型护栏：窗口大小运行时由 `getContextUsage` 实测（非写死）。轮转「丢明细、不丢计数」——`--report` 累计统计改读 `state.event_counts`，轮转不破坏语义。心跳节流落盘让外部 agent 能判卡死（runOneTask 期间最长 60min，否则 state.json 冻结）。
 
-## 可选：外部 agent 发战报 / 注册 skill
+## 注册 skill（让 agent 会用 swallow）
 
-orchestrator 把结果结构化到 `state.json`（恢复点）+ `events.jsonl`（审计流）+ `.task.md`（进度），**不发战报**。由外部 agent 起定时任务读这些结果自行组织发送：
-
-```bash
-# 外部 agent 定时读结果（具体由该 agent 的定时机制实现）：
-cat /path/to/your/project/state.json          # status/loop_count/last_termination 等
-tail -8 /path/to/your/project/events.jsonl    # 最近事件
-```
-
-战报文案、推送频道、频率全由 agent 定，orchestrator 不掺和。推进与观察彻底解耦：watch 挂了不影响 agent 读已落盘的结果；agent 挂了不影响 watch 推进。
-
-`--watch` 推进靠长进程，它崩了需重启才继续。要无人值守自动拉起，靠 systemd `Restart=always` / supervisor / agent 守护。
-
-注册 skill 进当前 agent（**拷成真目录，不要用 symlink**）：
+skill 是 agent 调度 swallow 的入口（SKILL.md 告诉 agent 怎么跑 swallow / 读状态 / 发战报）。**用 swallow 前必须注册进你要用的 agent**（**拷成真目录，不要用 symlink**）：
 
 多数 agent 的 skill 扫描器用 find/glob 遍历 skills 目录，默认不跟符号链接进子目录——symlink 进去的 skill 对 agent 不可见（实测：`find <skills>/swallow-scheduler -name SKILL.md` 对 symlink 返回空，对真目录正常）。所以拷真目录：
 
@@ -108,5 +96,19 @@ cp -r ~/.local/share/swallow/skill "$SKILLS_DIR/swallow-scheduler"
 ```
 
 卸载时删那个真目录：`rm -rf "$SKILLS_DIR/swallow-scheduler"`（`install.sh uninstall` 也会顺带清各已知 agent 目录下的 swallow-scheduler，无论 symlink 还是真目录）。你用的 agent 若不在默认列表里，卸载前 `export SWALLOW_SKILL_DIRS=<skills-dir>:<skills-dir>` 再 uninstall，脚本会一并清理。
+
+## 可选：外部 agent 发战报
+
+orchestrator 把结果结构化到 `state.json`（恢复点）+ `events.jsonl`（审计流）+ `.task.md`（进度），**不发战报**。要战报，由外部 agent 起定时任务读这些结果自行组织发送：
+
+```bash
+# 外部 agent 定时读结果（具体由该 agent 的定时机制实现）：
+cat /path/to/your/project/state.json          # status/loop_count/last_termination 等
+tail -8 /path/to/your/project/events.jsonl    # 最近事件
+```
+
+战报文案、推送频道、频率全由 agent 定，orchestrator 不掺和。推进与观察彻底解耦：watch 挂了不影响 agent 读已落盘的结果；agent 挂了不影响 watch 推进。不需要战报（比如本地开发、自己看状态就够）可跳过本节。
+
+`--watch` 推进靠长进程，它崩了需重启才继续。要无人值守自动拉起，靠 systemd `Restart=always` / supervisor / agent 守护。
 
 ⚠️ `--cwd` 指向你要开发的目标项目（orchestrator 往那写产物 + git commit）。**别指向 swallow 仓库自身。**
