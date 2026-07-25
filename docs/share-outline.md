@@ -160,13 +160,11 @@ sequenceDiagram
     Note over T: 从崩溃处续跑同任务<br/>loop_count=N+1<br/>state 不丢 / 不重复打勾
 ```
 
-三项基石技术：
+三个关键点：
 
-| 技术 | 选型 | 解决的问题 |
-|---|---|---|
-| **原子写** | `write-file-atomic` v7 | 状态文件写半截被杀死不截断（临时文件 → fsync data → rename → fsync dir） |
-| **进程锁** | `proper-lockfile`（stale 60s） | 防止多进程并发写入状态；`kill -9` 残留锁自动超时接管 |
-| **配对检测** | events.jsonl 中 tick_started / tick_completed 配对关系 | 判定异常终止 vs 正常完成 |
+- **原子写**（`write-file-atomic`）：写 state.json 时先写临时文件、再 rename 覆盖原文件，写到一半被杀死不会截断
+- **进程锁**（`proper-lockfile`）：同时只能跑一个 watch，另一个检测到锁就退出。进程被杀死后锁 60 秒自动过期
+- **崩溃检测**：events.jsonl 里每个 tick 记录开始事件，如果只有开始没有结束，下个进程就知道上一轮崩了
 
 #### 2.1.3 会话策略与 Query 调用点
 
