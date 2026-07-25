@@ -1,5 +1,22 @@
 # Hermes 最佳配置实战：任务执行 + 定时战报
 
+```mermaid
+flowchart TB
+    You([👤 你 · 只跟 Hermes 对话])
+    Hermes([🤖 Hermes])
+    Watch["🛠️ loop --watch 自驱<br/>拆任务 → 写代码 → commit"]
+    Disk[("📁 落盘结果<br/>state.json · events.jsonl · .task.md")]
+    WeCom([📱 企业微信])
+
+    You -->|"「跑 loop」"| Hermes
+    Hermes -->|"拉起"| Watch
+    Watch -->|"每轮写"| Disk
+    You -->|"「定时发战报」"| Hermes
+    Hermes -->|"定时读"| Disk
+    Hermes -->|"推战报"| WeCom
+    WeCom -.->|"收消息"| You
+```
+
 这篇假设你只跟 Hermes 对话、不碰命令。你说话，Hermes 干活：装 loop、跑 loop、读结果发企业微信。
 
 两件事对仗：**任务执行**（loop 自驱干开发）/ **定时战报**（Hermes 定时读结果推企业微信）。Hermes 只读结果发战报，不拉起、不守护 loop——各管各的。
