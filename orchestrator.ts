@@ -4,6 +4,7 @@
 //   npx tsx orchestrator.ts [--cwd <项目目录>] "目标"           # 裸跑=--watch（自驱：bootstrap+while(tick)）
 //   npx tsx orchestrator.ts [--cwd <项目目录>] --watch "目标"    # 显式自驱
 //   npx tsx orchestrator.ts [--cwd <项目目录>] --status         # 多行实时状态（给人看）
+//   npx tsx orchestrator.ts [--cwd <项目目录>] --status --json   # 结构化 JSON（给程序读，跨平台零依赖）
 //   npx tsx orchestrator.ts [--cwd <项目目录>] --report         # 运行报告
 //   npx tsx orchestrator.ts [--cwd <项目目录>] --stop            # 写 .stop 哨兵 + 杀 --watch PID
 //   npx tsx orchestrator.ts [--cwd <项目目录>] --resume         # 删 .stop 哨兵
@@ -1026,7 +1027,46 @@ function watchRunning(): { running: boolean; pid: number | null } {
   catch { return { running: false, pid }; }
 }
 
-function showStatus() {
+// 机器可读的结构化状态快照（--status --json 输出）。
+// 把 state.json + .task.md 进度 + watch 进程 + events 末尾汇成单一 JSON 对象，
+// 外部工具（python/awk/jq/任何能读 JSON 的）无需解析人类可读文本即可消费，跨平台零环境依赖。
+function buildStatusSnapshot() {
+  const s = readStateJson();
+  const { total, remaining, done, blocked } = readTasks();
+  const wr = watchRunning();
+  const pct = s.ctx_max_tokens !== null && s.last_input_tokens !== null && s.ctx_max_tokens > 0
+    ? Math.round((s.last_input_tokens / s.ctx_max_tokens) * 100) : null;
+  return {
+    status: s.status,
+    goal: s.goal || null,
+    tasks: { total, done, blocked, remaining },
+    loop_count: s.loop_count,
+    context: s.ctx_max_tokens !== null && s.last_input_tokens !== null
+      ? { input_tokens: s.last_input_tokens, max_tokens: s.ctx_max_tokens, pct, recycle_ratio: CTX_RECYCLE_RATIO }
+      : null,
+    had_any_commit: s.had_any_commit,
+    stall_task: s.stall_task,
+    stall_count: s.stall_count,
+    stall_limit: STALL_LIMIT,
+    session_retries: s.session_retries,
+    session_retry_limit: SESSION_RETRY_LIMIT,
+    last_tick_at: s.last_tick_at,
+    last_heartbeat_at: s.last_heartbeat_at,
+    heartbeat_stale_min: ABORT_TIMEOUT_MIN,
+    last_tick_id: s.last_tick_id,
+    last_termination: s.last_termination,
+    watch: { running: wr.running, pid: wr.pid },
+    session_id: readSessionId(),
+    event_counts: s.event_counts,
+    recent_events: readEventsTail(8),
+  };
+}
+
+function showStatus(json: boolean) {
+  if (json) {
+    console.log(JSON.stringify(buildStatusSnapshot(), null, 2));
+    return;
+  }
   // 优先读 state.json
   const s = readStateJson();
   const { total, remaining, done, blocked } = readTasks();
@@ -1138,6 +1178,7 @@ function resumeRun() {
 function parseArgs(argv: string[]): {
   goal?: string; cwd?: string;
   action?: "status" | "report" | "stop" | "resume" | "watch";
+  json?: boolean;
 } {
   let parsed: { values: Record<string, string | boolean | undefined>; positionals: string[] };
   try {
@@ -1152,6 +1193,7 @@ function parseArgs(argv: string[]): {
         report: { type: "boolean", default: false },
         stop: { type: "boolean", default: false },
         resume: { type: "boolean", default: false },
+        json: { type: "boolean", default: false },
       },
     });
   } catch (e) {
@@ -1168,7 +1210,7 @@ function parseArgs(argv: string[]): {
   else if (values.report) action = "report";
   else if (values.stop) action = "stop";
   else if (values.resume) action = "resume";
-  return { goal, cwd, action };
+  return { goal, cwd, action, json: values.json === true };
 }
 
 function preflightEnv() {
@@ -1186,7 +1228,7 @@ function preflightEnv() {
 }
 
 async function main() {
-  const { goal, cwd, action } = parseArgs(process.argv.slice(2));
+  const { goal, cwd, action, json } = parseArgs(process.argv.slice(2));
 
   // --cwd > SWALLOW_PROJECT env > 当前目录。chdir 后产物/git/会话目录三者统一。
   const targetCwd = cwd ? resolve(cwd) : (process.env.SWALLOW_PROJECT ? resolve(process.env.SWALLOW_PROJECT) : process.cwd());
@@ -1201,7 +1243,7 @@ async function main() {
   // 预检仅对起 query 的动作（--watch/裸跑）做；只读/操控动作不挡。
   if (action === "watch" || !action) preflightEnv();
 
-  if (action === "status") { showStatus(); return; }
+  if (action === "status") { showStatus(json ?? false); return; }
   if (action === "report") { showReport(); return; }
   if (action === "stop") { stopAll(); return; }
   if (action === "resume") { resumeRun(); return; }
