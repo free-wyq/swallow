@@ -187,7 +187,7 @@ loop --cwd /path/to/project "构建一个 Go REST API"
 #   tail -8 /path/to/project/events.jsonl
 ```
 
-战报怎么发是独立工作，orchestrator 本身不改、也不掺和。
+战报怎么发是独立工作，orchestrator 本身不改、也不掺和。接入实战（拉起 + 定时战报 + 微信推送）见 [hermes-guide.md](hermes-guide.md) / [claude-code-guide.md](claude-code-guide.md)。
 
 ## 注册成 skill（可选，agent 自行推理）
 
