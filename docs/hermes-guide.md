@@ -79,7 +79,7 @@ swallow 把结果结构化落盘（`state.json` 恢复点 / `events.jsonl` 审�
 
 📊 进度：[已完成数]/[总数]
 
-🧹 [上下文压缩状态，有 /compact deep 则显示「上下文 XM→YK（/compact deep 压缩成功）」，无则不显示此行]
+🧹 [上下文压缩状态：读 events.jsonl 末尾最近的 `compact_probe_ok` 事件，显示「上下文压缩（/compact deep 压缩成功）：`pre`→`post` tokens（压掉 `freed`，压缩至 `compress_ratio`%·约 1/n）」。三量都用事件的 pre/post 同源同量纲算（freed=pre-post，compress_ratio=post/pre）。无该事件则不显示此行]
 
 ⚠️ [异常标注：空转/阻塞/报错/崩溃才显示，无异常则不显示此行]
 

@@ -225,12 +225,16 @@ interface RoundOutcome {
 
 // 上下文探针：ctx 偏重时先发 /compact deep 试压一轮，看能不能把会话压下来。
 // /compact 是本地 slash 命令，headless 下作为 prompt 发出即触发压缩（GLM 代理实测可用）。
-// 压缩后大小取 compact_boundary.compact_metadata.post_tokens（权威信号）—— 不能取 result.usage.input_tokens：
-// /compact 这一轮无 assistant 输出，实测 result.usage.input_tokens=0，会误判压缩后大小为 0。
-// 出 compact_boundary 且有 post_tokens → 返回压缩后大小供 caller 比阈值（保留会话）；
+// 压缩前后大小取 compact_metadata 的 pre_tokens/post_tokens（权威信号，成对同量纲可比）——
+// 不能取 result.usage.input_tokens：/compact 这一轮无 assistant 输出，实测 result.usage.input_tokens=0，会误判压缩后大小为 0。
+// 返回 {pre, post}：两者同源同量纲，caller 直接算压缩量(freed=pre-post)/压缩比(post/pre)。
+// 出 compact_boundary 且有 post_tokens → 返回 {pre, post} 供 caller 比阈值（保留会话）；
 // 没出 compact_boundary（/compact 未被识别）或没 post_tokens → 返回 null，caller fallback 弃会话。
-async function probeCompactDeep(sessionId: string | null): Promise<number | null> {
+// ⚠️ 这里的 pre/post 都是「单次压缩的成对前后值」—— ≠ /compact 界面显示的 before/after（那个 before 是会话累计流经的 input 总量，
+//   能到 1.44M 量级，量纲不同不可比）。护栏的 state.last_input_tokens 是单轮 input（≤窗口），与 pre 同量纲。
+async function probeCompactDeep(sessionId: string | null): Promise<{ pre: number; post: number } | null> {
   if (!sessionId) return null;   // 没会话历史，没东西可压
+  let preTokens: number | null = null;
   let postTokens: number | null = null;
   try {
     const q = query({
@@ -243,17 +247,19 @@ async function probeCompactDeep(sessionId: string | null): Promise<number | null
       },
     });
     for await (const msg of q as AsyncIterable<SDKMessage>) {
-      // compact_metadata.post_tokens = 压缩后真实 token 数（trigger=manual/auto）
+      // compact_metadata.pre_tokens/post_tokens = 压缩前/后真实 token 数（trigger=manual/auto，成对同量纲）
       if (msg.type === "system" && (msg as { subtype?: string }).subtype === "compact_boundary") {
-        const post = (msg as { compact_metadata?: { post_tokens?: number } }).compact_metadata?.post_tokens;
-        if (typeof post === "number") postTokens = post;
+        const meta = (msg as { compact_metadata?: { pre_tokens?: number; post_tokens?: number } }).compact_metadata;
+        if (typeof meta?.pre_tokens === "number") preTokens = meta.pre_tokens;
+        if (typeof meta?.post_tokens === "number") postTokens = meta.post_tokens;
       }
     }
   } catch (e) {
     log(`⚠️ /compact deep 探针异常（忽略，fallback 弃会话）: ${(e as Error).message}`);
     return null;
   }
-  return postTokens;
+  if (preTokens === null || postTokens === null) return null;  // 没拿到成对值，fallback
+  return { pre: preTokens, post: postTokens };
 }
 
 // 铁律 prompt：禁提问 + 自主决策 + 已完成检测（防假完成）
@@ -714,15 +720,32 @@ async function tick(): Promise<TickOutcome> {
       const max = state.ctx_max_tokens ?? 0;
       if (max > 0 && state.last_input_tokens >= Math.floor(max * CTX_RECYCLE_RATIO)) {
         log(`🧹 上下文偏重（${state.last_input_tokens}/${max} ≈ ${(state.last_input_tokens / max * 100).toFixed(0)}% ≥ ${CTX_RECYCLE_RATIO}），试 /compact deep 探针压一轮`);
-        const afterTokens = await probeCompactDeep(sessionId);
-        if (afterTokens !== null && max > 0 && afterTokens < Math.floor(max * CTX_RECYCLE_RATIO)) {
-          log(`✅ /compact deep 压成功：${state.last_input_tokens} → ${afterTokens}，保留会话继续 resume`);
-          appendEvent("compact_probe_ok", { before: state.last_input_tokens, after: afterTokens, ratio: CTX_RECYCLE_RATIO }, { tick_id: tickId, loop_count: state.loop_count });
-          state.last_input_tokens = afterTokens;
+        const probe = await probeCompactDeep(sessionId);
+        if (probe !== null && max > 0 && probe.post < Math.floor(max * CTX_RECYCLE_RATIO)) {
+          const freed = probe.pre - probe.post;
+          const compressRatio = probe.pre > 0 ? +(probe.post / probe.pre).toFixed(3) : null;
+          log(`✅ /compact deep 压成功：${probe.pre} → ${probe.post}（压掉 ${freed}，压缩至 ${compressRatio != null ? (compressRatio * 100).toFixed(1) + "%" : "?"}），保留会话继续 resume`);
+          appendEvent("compact_probe_ok", {
+            pre: probe.pre,                          // 压缩前 token（单次压缩的 pre_tokens，同量纲）
+            post: probe.post,                         // 压缩后 token
+            freed,                                    // 压缩量 = pre - post
+            compress_ratio: compressRatio,            // 真压缩比 = post / pre（≤1，越小压得越多）
+            trigger_threshold: CTX_RECYCLE_RATIO,     // 触发阈值（0.7）—— 不是压缩比，改名防误读
+            max_tokens: max,                          // 模型上下文窗口
+          }, { tick_id: tickId, loop_count: state.loop_count });
+          state.last_input_tokens = probe.post;
         } else {
           // 探针没压下来（/compact 未被识别或压完仍超阈值）→ 直接弃旧会话开新会话
-          log(`⚠️ /compact deep 未压到阈值（${afterTokens ?? "?"}/${max}），弃旧会话下轮开新会话`);
-          appendEvent("compact_probe_failed", { before: state.last_input_tokens, after: afterTokens, ratio: CTX_RECYCLE_RATIO }, { tick_id: tickId, loop_count: state.loop_count });
+          log(`⚠️ /compact deep 未压到阈值（${probe ? `${probe.post}/${max}` : `null/${max}`}），弃旧会话下轮开新会话`);
+          appendEvent("compact_probe_failed", {
+            pre: probe?.pre ?? null,                  // 压缩前 token（探针异常/没出 boundary 时可能 null）
+            post: probe?.post ?? null,                // 压缩后 token（可能 null 或仍超阈值）
+            freed: probe ? probe.pre - probe.post : null,   // 压缩量（没跑成压缩则 null）
+            compress_ratio: probe && probe.pre > 0 ? +(probe.post / probe.pre).toFixed(3) : null,  // 真压缩比（接近1=没压下来）
+            trigger_threshold: CTX_RECYCLE_RATIO,
+            max_tokens: max,
+            session_dropped: true,                    // 标明此次探针失败后弃了会话
+          }, { tick_id: tickId, loop_count: state.loop_count });
           clearSessionId();
           sessionId = null;
           state.last_input_tokens = null;  // 新会话从零开始，旧 token 数作废
@@ -767,8 +790,15 @@ async function tick(): Promise<TickOutcome> {
       if (result.subtype !== "success") {
         log(`⚠️ 本轮非 success: subtype=${result.subtype} stop_reason=${result.stop_reason}`);
       }
-      // 记录上轮上下文占用，供下轮健康度判定（input_tokens = 本轮实际喂进模型的 token）。
-      const inTok = result.usage?.input_tokens;
+      // 记录上轮上下文占用，供下轮健康度判定。
+      // ⚠️ input_tokens 不含 cache_read/cache_creation——原生 Anthropic 会低估真实上下文占用（大头在缓存命中）。
+      // ⚠️ GLM 代理若累计上报（1.44M 现象疑似此因），input_tokens 会是累计值、compact 后不重置，
+      //    可能导致下轮 last_input_tokens 被覆盖成大值 → 每轮 compact 死循环。待抓包确认代理行为。
+      // 下行诊断日志：跑真实任务时 night_run.log 会打出代理实际报的 usage 全字段，一眼看单轮(几万)还是累计(百万)。
+      // 抓包确认后视情况改：① 累计→健康度改用 getContextUsage().totalTokens；② compact 后别用下轮 usage 覆盖。
+      const usage = result.usage;
+      if (usage) log(`📊 usage: ${JSON.stringify(usage)}`);
+      const inTok = usage?.input_tokens;
       if (typeof inTok === "number") state.last_input_tokens = inTok;
     }
 

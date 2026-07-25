@@ -96,10 +96,12 @@ swallow --cwd <项目> --resume     # 恢复（删 .stop）
 🔧 当前操作：正在改 src/server.go
 ⏱ 心跳：20:24:11（启动 20:07:54，已运行 30 分钟）
 📊 进度：1/8
-🧹 上下文 3.6M→9K（/compact deep 压缩成功）
+🧹 上下文压缩（/compact deep 压缩成功）：81663 → 2611 tokens（压掉 79K，压缩至 3.2%·约 1/31）
 ```
 
 字段映射：轮数→`loop_count`、剩余/进度→`.task.md`、心跳→`last_heartbeat_at`、空转→`stall_count`、压缩→`compact_probe_ok` 事件。`当前操作`、`启动时间`等细粒度项 swallow 无专字段——从 events 末尾事件 / night_run.log 自行推断。
+
+**压缩行数据源（`compact_probe_ok` 事件）**：`pre`（压缩前 token）/ `post`（压缩后 token）同源同量纲成对可比，直接算 `freed = pre - post`（压缩量）、`compress_ratio = post / pre`（压缩比）。⚠️ 这俩是**单次压缩的成对前后值**，别和 `/compact` 命令界面显示的「会话累计流经 1.44M → 当前 1 万」混了——后者 `before` 是会话累计（17 轮累加、量纲不同、不可比压缩比），swallow 探针的 `pre` 是单轮值（≤模型窗口）。两者别放一起比。
 
 接入实战（任务执行 + 定时战报 + 微信推送）：
 - [Hermes 实战](../docs/hermes-guide.md)
