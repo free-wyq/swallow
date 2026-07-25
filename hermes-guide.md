@@ -2,11 +2,18 @@
 
 ```mermaid
 flowchart TB
-    You([👤 你 · 只跟 Hermes 对话])
+    You([👤 你])
     Hermes([🤖 Hermes])
-    Watch["🛠️ loop --watch 自驱<br/>拆任务 → 写代码 → commit"]
+
+    subgraph run["① 任务执行"]
+      Watch["🛠️ loop --watch 自驱"]
+    end
+
     Disk[("📁 落盘结果<br/>state.json · events.jsonl · .task.md")]
-    WeCom([📱 企业微信])
+
+    subgraph report["② 定时战报"]
+      WeCom([📱 企业微信])
+    end
 
     You -->|"「跑 loop」"| Hermes
     Hermes -->|"拉起"| Watch
@@ -15,6 +22,10 @@ flowchart TB
     Hermes -->|"定时读"| Disk
     Hermes -->|"推战报"| WeCom
     WeCom -.->|"收消息"| You
+
+    style run fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style report fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style Disk fill:#fff9c4,stroke:#f9a825,stroke-width:2px
 ```
 
 这篇假设你只跟 Hermes 对话、不碰命令。你说话，Hermes 干活：装 loop、跑 loop、读结果发企业微信。
