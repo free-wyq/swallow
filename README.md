@@ -202,17 +202,9 @@ swallow --cwd /path/to/project "构建一个 Go REST API"
 
 ## 注册成 skill（让 agent 会用 swallow）
 
-`skill/` 是一个可被 agent 加载的 skill（含 `SKILL.md`），是 agent 调度 swallow 的入口。**用 swallow 前必须注册进你要用的 agent。** 多数 agent 的 skill 扫描器用 find/glob 遍历 skills 目录、**默认不跟符号链接进子目录**——symlink 进去的 skill 扫描器看不见。所以注册时**拷成真目录**而非 symlink：
+`skill/` 是一个可被 agent 加载的 skill（含 `SKILL.md`），是 agent 调度 swallow 的入口。**用 swallow 前必须注册进 agent 的 skills 目录。** 不预设具体哪个 agent——让 agent 自己发现它的 skills 目录并注册（install.md 是给 agent 读的指令，agent 读到即执行）。
 
-```bash
-# 推理你 agent 的 skills 目录（常见：~/.claude/skills · ~/.codex/skills · ~/.gemini/skills · ~/.cursor/skills · ~/.hermes/skills）
-SKILLS_DIR=~/.claude/skills
-mkdir -p "$SKILLS_DIR"; rm -rf "$SKILLS_DIR/swallow-scheduler"
-cp -r ~/.local/share/swallow/skill "$SKILLS_DIR/swallow-scheduler"
-# 验证扫描器能看到：find "$SKILLS_DIR/swallow-scheduler" -name SKILL.md   # 应返回一行
-```
-
-swallow 升级后重跑上述命令刷新 skill 内容。详见 [install.md](install.md)。
+多数 agent 的 skill 扫描器用 find/glob 遍历 skills 目录、**默认不跟符号链接进子目录**——symlink 进去的 skill 扫描器看不见。所以注册时**拷成真目录**而非 symlink。详见 [install.md](install.md)。
 
 ---
 

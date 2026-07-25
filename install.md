@@ -77,25 +77,20 @@ chmod 600 ~/.config/swallow.env   # 密钥别让别的用户读到
 
 要改限额改 `orchestrator.ts` 顶部这几行（`0=不限`，`hasLimit(n)=n>0` 自洽），不用动 swallow.env。行为护栏（`STALL_LIMIT` 起往后留正数防死循环；死信两兜底 `FAILED_TASK_LIMIT`/`DLQ_SPLIT_LIMIT` 横纵分工，详见 [docs/dead-letter-design.md](docs/dead-letter-design.md)）。预算护栏已随成本追踪一并移除（token 不限量场景下无意义）。ctx 健康度探针是主动型护栏：窗口大小运行时由 `getContextUsage` 实测（非写死）。轮转「丢明细、不丢计数」——`--report` 累计统计改读 `state.event_counts`，轮转不破坏语义。心跳节流落盘让外部 agent 能判卡死（runOneTask 期间最长 60min，否则 state.json 冻结）。
 
-## 注册 skill（让 agent 会用 swallow）
+## 注册 skill（让你会用 swallow）
 
-skill 是 agent 调度 swallow 的入口（SKILL.md 告诉 agent 怎么跑 swallow / 读状态 / 发战报）。**用 swallow 前必须注册进你要用的 agent**（**拷成真目录，不要用 symlink**）：
+skill 是你调度 swallow 的入口（SKILL.md 告诉你怎么跑 swallow / 读状态 / 发战报）。**用 swallow 前必须注册进你自己的 skills 目录。**
 
-多数 agent 的 skill 扫描器用 find/glob 遍历 skills 目录，默认不跟符号链接进子目录——symlink 进去的 skill 对 agent 不可见（实测：`find <skills>/swallow-scheduler -name SKILL.md` 对 symlink 返回空，对真目录正常）。所以拷真目录：
+多数 agent 的 skill 扫描器用 find/glob 遍历 skills 目录，默认不跟符号链接进子目录——symlink 进去的 skill 扫描器不可见（实测：`find <skills>/swallow-scheduler -name SKILL.md` 对 symlink 返回空，对真目录正常）。所以**拷成真目录而非 symlink**：
 
-```bash
-# 1. 推理你 agent 的 skills 目录（常见位置，按你实际用的判断；不确定就查该 agent 文档）：
-#    Claude Code ~/.claude/skills · Codex ~/.codex/skills · Gemini CLI ~/.gemini/skills
-#    Cursor ~/.cursor/skills · Hermes ~/.hermes/skills
-SKILLS_DIR=~/.claude/skills
+1. 推理你自己的 skills 目录（查你自己的文档/约定，不确定就问用户）。
+2. 把源目录 `~/.local/share/swallow/skill` **拷成真目录**（`cp -r`，不要 symlink——你的扫描器默认不跟符号链接，symlink 进去的 skill 你看不见）。
+3. 目标名用 `swallow-scheduler`，已存在先删再拷（刷新）。
+4. 完成后 `find <你的skills目录>/swallow-scheduler -name SKILL.md` 验证能扫到（应返回一行）。
 
-# 2. 拷成真目录（swallow 升级后重跑这两行刷新 skill 内容）
-mkdir -p "$SKILLS_DIR"
-rm -rf "$SKILLS_DIR/swallow-scheduler"
-cp -r ~/.local/share/swallow/skill "$SKILLS_DIR/swallow-scheduler"
-```
+swallow 升级后重做上面步骤刷新 skill 内容。
 
-卸载时删那个真目录：`rm -rf "$SKILLS_DIR/swallow-scheduler"`（`install.sh uninstall` 也会顺带清各已知 agent 目录下的 swallow-scheduler，无论 symlink 还是真目录）。你用的 agent 若不在默认列表里，卸载前 `export SWALLOW_SKILL_DIRS=<skills-dir>:<skills-dir>` 再 uninstall，脚本会一并清理。
+卸载时 `install.sh uninstall` 会顺带扫各已知 agent 目录（Claude Code / Codex / Gemini / Cursor / Codeium / Windsurf / Hermes）清掉 `swallow-scheduler`（symlink 或真目录拷贝都清）。你若不在这默认列表里，卸载前 `export SWALLOW_SKILL_DIRS=<你的skills-dir>:<skills-dir>` 再 uninstall，脚本会一并清理。
 
 ## 可选：外部 agent 发战报
 
