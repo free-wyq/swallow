@@ -112,22 +112,22 @@ Swallow 架构围绕三项原则展开：
 
 #### 2.1.1 BootStrap → Tick 生命周期
 
-```
-用户输入: "构建一个 Go REST API"
+```mermaid
+flowchart LR
+    subgraph BOOT["bootstrap"]
+        A[读取 CLAUDE.md / .claude/memory] --> B[拆解任务]
+        B --> C[写入 .task.md]
+    end
 
-bootstrap(query①):
-  读取 CLAUDE.md + .claude/memory → 任务拆解 → 写入 .task.md
-  .task.md:
-    [ ] 初始化 Go module
-    [ ] 实现 handler + router
-    [ ] 添加测试
+    C --> TASK[".task.md<br/>[ ] 初始化 Go module<br/>[ ] 实现 handler<br/>[ ] 添加测试"]
 
-while(tick()):
-  tick:
-    读取 .task.md 首个未完成任务 → 执行 → commit
-    [x] 初始化 Go module
-    [ ] 实现 handler + router    ← 下一轮 tick
-    [ ] 添加测试
+    subgraph TICK["tick (while 循环)"]
+        D[读取首个 [ ] 任务] --> E[runOneTask 执行]
+        E --> F[commit]
+        F --> D
+    end
+
+    TASK --> D
 ```
 
 关键设计决策：
@@ -183,14 +183,14 @@ sequenceDiagram
 
 #### 2.2.1 七层防线
 
-```
-  Layer 1: 原子写      —— 写文件被杀不截断
-  Layer 2: 进程锁      —— 同时只跑一个 watch
-  Layer 3: 假完成守卫  —— 没改代码不打勾
-  Layer 4: ctx 探针    —— 上下文快满时主动压缩
-  Layer 5: 日志轮转    —— 审计日志不涨到几百 MB
-  Layer 6: 心跳        —— 检测进程卡死
-  Layer 7: 崩溃检测    —— 发现上一轮异常终止
+```mermaid
+flowchart LR
+    L1["① 原子写<br/>写文件被杀不截断"] --> L2["② 进程锁<br/>同时只跑一个 watch"]
+    L2 --> L3["③ 假完成守卫<br/>没改代码不打勾"]
+    L3 --> L4["④ ctx 探针<br/>上下文快满时主动压缩"]
+    L4 --> L5["⑤ 日志轮转<br/>审计日志不涨到几百 MB"]
+    L5 --> L6["⑥ 心跳<br/>检测进程卡死"]
+    L6 --> L7["⑦ 崩溃检测<br/>发现上一轮异常终止"]
 ```
 
 **Layer 1 - 原子写：** `write-file-atomic`，先写临时文件再 rename 覆盖，写到一半被杀原文件不损坏。
@@ -281,11 +281,11 @@ task 型拆子任务插回 .task.md，goal 型拆子 goal 独立 bootstrap。
 
 #### 2.4.4 上下文管理递进策略
 
-```
-① SDK Auto-Compact   → 持续运行，被动回收
-② 主动探针           → 占用率 > 70% 时主动压缩
-③ 会话重建           → 压缩无效就弃旧会话
-④ 死信队列拆解       → 连续溢出时分解任务
+```mermaid
+flowchart LR
+    L1["① SDK Auto-Compact<br/>持续运行，被动回收"] --> L2["② 主动探针<br/>占用率 > 70% 时主动压缩"]
+    L2 --> L3["③ 会话重建<br/>压缩无效就弃旧会话"]
+    L3 --> L4["④ 死信队列拆解<br/>连续溢出时分解任务"]
 ```
 
 ---
