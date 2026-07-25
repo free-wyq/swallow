@@ -122,8 +122,8 @@ flowchart LR
     C --> TASK[".task.md<br/>[ ] 初始化 Go module<br/>[ ] 实现 handler<br/>[ ] 添加测试"]
 
     subgraph TICK["tick (while 循环)"]
-        D[读取首个 [ ] 任务] --> E[runOneTask 执行]
-        E --> F[commit]
+        D["读取首个 [ ] 任务"] --> E["runOneTask 执行"]
+        E --> F["commit"]
         F --> D
     end
 
