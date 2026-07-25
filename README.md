@@ -161,7 +161,7 @@ cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥�
 | `ANTHROPIC_BASE_URL` | 代理才填 | 走代理/中转才填 |
 | `ANTHROPIC_MODEL` 等 | 代理才填 | 走代理时指定模型名 |
 
-**限额不在这里**——写死在 `orchestrator.ts` 顶部常量（token 不限量场景下轮数护栏纯属挡路，一律 `0 = 不限`；行为护栏 `STALL_LIMIT=3` / `ABORT_TIMEOUT_MIN=60` / `SESSION_RETRY_LIMIT=3` / `FAILED_TASK_LIMIT=5` / `DLQ_SPLIT_LIMIT=30` 留正数防死循环）。要改改代码，不读 swallow.env。详见 [install.md](install.md)。
+**限额不在这里**——写死在 `orchestrator.ts` 顶部常量（token 不限量场景下轮数护栏纯属挡路，一律 `0 = 不限`；行为护栏 `STALL_LIMIT=3` / `ABORT_TIMEOUT_MIN=60` / `SESSION_RETRY_LIMIT=3` / `FAILED_TASK_LIMIT=5` / `DLQ_SPLIT_LIMIT=30` 留正数防死循环）。要改改代码，不读 swallow.env。详见 [docs/observability.md](docs/observability.md) §3。
 
 ## 命令一览
 

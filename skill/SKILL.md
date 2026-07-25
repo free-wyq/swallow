@@ -125,7 +125,7 @@ cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow.env && chmod 600
 # 填 ANTHROPIC_API_KEY=sk-...；走代理加 ANTHROPIC_BASE_URL=http://...:3000、ANTHROPIC_MODEL=glm-5.1
 ```
 
-限额写死在 `orchestrator.ts` 顶部常量（不读 swallow.env），详见 [install.md](../install.md)。
+限额写死在 `orchestrator.ts` 顶部常量（不读 swallow.env），各常量含义见 [docs/observability.md](../docs/observability.md) §3。
 
 ## 已知行为
 
