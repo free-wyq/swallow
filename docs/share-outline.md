@@ -29,31 +29,71 @@ Swallow 项目的目标：构建一个无人值守的开发批处理引擎，使
 
 ### 1.3 架构总览
 
-```
-┌─────────────────────────────────────┐
-│        外部调用方                     │
-│  (用户 / 外部 agent)                 │
-│  传入目标，拉起 --watch             │
-└──────────┬──────────────────────────┘
-           │ --watch "构建一个 Go REST API"
-           ▼
-┌─────────────────────────────────────┐
-│  Swallow Orchestrator               │
-│  bootstrap → tick × N → done       │
-│  崩溃自动续跑 · 溢出自动拆解        │
-├─────────────────────────────────────┤
-│  4 处 query 调用点:                  │
-│  bootstrap / runOneTask /           │
-│  probeCompactDeep / splitTask      │
-└──────┬──────────────────────────────┘
-        │ 结构化数据落地
-        ▼
-  ┌──────────────────────────┐
-  │ 目标项目目录              │
-  │  state.json   : 恢复点    │
-  │  events.jsonl : 审计日志  │
-  │  .task.md     : 进度源    │
-  └──────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph HOST["⚙️ 主机配置 · Linux/macOS（~/.config/）"]
+      ENV[("swallow.env<br/>密钥 + 代理/模型")]
+    end
+
+    subgraph PROJ["📁 目标项目（--cwd 指向）· 产物写入处 + git commit 仓库"]
+      direction TB
+      KNOW[("CLAUDE.md / .claude/memory<br/>已有知识")]
+      TASK[(".task.md · 进度真相源")]
+      STATE[("state.json · 恢复点<br/>原子写")]
+      EVENTS[("events.jsonl<br/>append-only 审计")]
+    end
+
+    subgraph SCRIPT["🛠️ swallow orchestrator（脚本）· --watch 长进程"]
+      direction TB
+      BOOT["bootstrap 拆任务 · query()"]
+      TICK["tick 幂等单步 · while 循环"]
+      RUN["runOneTask · query()"]
+      SPLIT["splitTask 拆子项 · query()（爆才调）"]
+      DLQ[("state.dead_letter<br/>死信队列 lazy 拆")]
+      SDK["claude-agent-sdk（npm 包）"]
+      CLI["claude 引擎（随 SDK 打包）"]
+      BOOT --> TICK
+      TICK -->|"读首个未完成"| RUN
+      RUN --> SDK
+      SDK -->|"spawn 子进程"| CLI
+      CLI -.->|"PostToolUse 回调"| RUN
+      RUN -->|"ctx_overflow 达限"| DLQ
+      BOOT -->|"爆/截断"| DLQ
+      DLQ --> SPLIT
+      SPLIT -->|"子 task 插回 / 子 goal 独立 bootstrap"| TICK
+    end
+
+    subgraph EXTBOX["📡 外部 agent / 用户（脚本之外）"]
+      direction LR
+      Ext([定时读结果])
+      Push([自行组织发战报])
+      User([拉起 --watch])
+    end
+
+    User -->|"拉起"| BOOT
+    KNOW -->|"loadProjectKnowledge 喂基线"| BOOT
+    ENV -.->|"密钥/代理/模型"| BOOT
+    BOOT -->|"写出"| TASK
+    ENV -.->|"密钥/模型"| RUN
+    TICK -->|"原子写状态"| STATE
+    TICK --> EVENTS
+    TICK -->|"打勾 [x]/[~]"| TASK
+    Ext -->|"读已落盘结果"| STATE
+    Ext -.-> Push
+
+    style HOST fill:#fff9c4,stroke:#f9a825,stroke-width:2px
+    style PROJ fill:#f1f8e9,stroke:#2e7d32,stroke-width:2px
+    style SCRIPT fill:#fff8e1,stroke:#e65100,stroke-width:2px
+    style EXTBOX fill:#e8f4fd,stroke:#1565c0,stroke-width:2px
+    style STATE fill:#c8e6c9
+    style EVENTS fill:#bbdefb
+    style TICK fill:#ffe0b2
+    style SDK fill:#e8f5e9
+    style CLI fill:#ffe0b2
+    style KNOW fill:#e1bee7
+    style ENV fill:#fff59d
+    style DLQ fill:#ffccbc,stroke:#bf360c
+    style SPLIT fill:#ffe0b2
 ```
 
 ### 1.4 核心设计理念
@@ -101,21 +141,24 @@ while(tick()):
 
 #### 2.1.2 崩溃恢复时序
 
-```
-时间线 →
-                                        💀 进程被 kill -9
-tick_started(A) ─── state={loop:5, status:running} ─── 进程终止
-         │
-         ├── events.jsonl: 记录 tick_started(A)
-         └── state.json:   {loop_count: 5, status: "running"}
+```mermaid
+sequenceDiagram
+    participant W as --watch 进程
+    participant S as state.json
+    participant E as events.jsonl
+    participant T as 下一个 tick 进程
 
-60 秒后 ──────────────────────────────────────────────
-新进程启动:
-  Step 1 读取 state.json  → loop_count=5, status=running
-  Step 2 读取 events.jsonl → 发现 tick_started(A) 无配对 tick_completed
-  Step 3 判定: 第 5 轮异常终止
-  Step 4 从同一任务续跑, loop_count=6
-  Step 5 写入 tick_started(B) → runOneTask → 正常执行
+    W->>E: tick_started (tick_id=A)
+    W->>S: status=running, loop_count=N
+    Note over W: runOneTask 执行中...
+    Note over W: 💀 kill -9 进程被强杀
+    Note over E: tick_started(A) 无配对 tick_completed<br/>= 该 tick 崩溃（可检测）
+
+    Note over T: 60s 后锁 stale 自动 takeover
+    T->>S: 读 state.json（loop_count=N）
+    T->>E: 读到 tick_started(A) 无配对
+    T->>E: tick_started (tick_id=B)
+    Note over T: 从崩溃处续跑同任务<br/>loop_count=N+1<br/>state 不丢 / 不重复打勾
 ```
 
 三项基石技术：
