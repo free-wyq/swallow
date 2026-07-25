@@ -32,7 +32,8 @@ curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | 
 
 ```bash
 swallow --cwd <项目> "目标"       # 拉起推进（--watch 自驱）
-swallow --cwd <项目> --status     # 实时状态
+swallow --cwd <项目> --status     # 实时状态（人看）
+swallow --cwd <项目> --status --json   # 结构化 JSON（程序读，跨平台零依赖）
 swallow --cwd <项目> --report     # 运行报告
 swallow --cwd <项目> --stop        # 临时停（写 .stop 哨兵）
 swallow --cwd <项目> --resume     # 恢复（删 .stop）

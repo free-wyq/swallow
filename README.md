@@ -159,7 +159,8 @@ cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥�
 |---|---|
 | `swallow --cwd <proj> "目标"` | 裸跑 = `--watch`，自驱跑到完成 |
 | `swallow --cwd <proj> --watch "目标"` | 显式自驱（bootstrap + `while(tick)`） |
-| `swallow --cwd <proj> --status` | 实时状态（多行，读 state.json + events.jsonl） |
+| `swallow --cwd <proj> --status` | 实时状态（多行，给人看） |
+| `swallow --cwd <proj> --status --json` | 结构化 JSON（给程序读，跨平台零依赖） |
 | `swallow --cwd <proj> --report` | 运行报告 |
 | `swallow --cwd <proj> --stop` | 停（写 `.stop` 哨兵 + 杀 `--watch`） |
 | `swallow --cwd <proj> --resume` | 清 `.stop` 哨兵恢复 |

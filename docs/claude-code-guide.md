@@ -82,7 +82,7 @@ Claude Code 是**会话内交互工具**，不是常驻调度器。swallow 体�
 | **定时战报** | **OS crontab + bash 脚本**，或 **Hermes** | Claude Code 没有常驻进程，`/loop` 之类会话内定时在终端一关就死，到不了 24h |
 | 守护/自动拉起 | systemd `Restart=always` | 同上，OS 层的事 |
 
-**定时战报的正道是 OS 层，不经 Claude Code**：一个 10 行 bash 脚本（`jq` 读 `state.json` + `curl` 推企业微信 webhook）挂 `crontab`，每 5 分钟跑一次、几秒就退出——最轻最稳，不烧 token。要战报能力见 [hermes-guide.md](hermes-guide.md)（Hermes 有原生常驻 cron），或自己写 bash + crontab。
+**定时战报的正道是 OS 层，不经 Claude Code**：一个轻量 bash 脚本（`swallow --status --json` 拿结构化数据 + `curl` 推企业微信 webhook）挂 `crontab`，每 5 分钟跑一次、几秒就退出——最轻最稳，不烧 token。`--status --json` 是 swallow 原生吐的 JSON，用任何能读 JSON 的工具（python/node/awk）解析即可，**不依赖 jq 这类非标配工具**。要战报能力见 [hermes-guide.md](hermes-guide.md)（Hermes 有原生常驻 cron），或自己写 bash + crontab。
 
 ## 解耦关系
 
