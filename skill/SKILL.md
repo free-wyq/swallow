@@ -58,7 +58,10 @@ swallow --cwd <项目> --resume     # 恢复（删 .stop）
   "had_any_commit": true,            // 是否有过真实 commit
   "last_input_tokens": 164814,       // 上轮上下文占用
   "ctx_max_tokens": 200000,         // 模型上下文窗口
-  "event_counts": {"task_completed": 14, "task_stall": 1}  // 事件累计计数
+  "event_counts": {"task_completed": 14, "task_stall": 1},  // 事件累计计数
+  "dead_letter": [],                  // 死信队列（爆掉的 task/goal 待拆，暂态）
+  "failed_tasks": [],                 // 真失败册（拆到底做不了，终态）
+  "dlq_split_count": 0                 // splitTask 累计调用次数（防死循环）
 }
 ```
 
@@ -69,13 +72,15 @@ swallow --cwd <项目> --resume     # 恢复（删 .stop）
 - `blocked_suspect` — 疑假完成，需人工介入
 - `ctx_overflow_retry` — 撞上下文重试中
 
+`last_termination.reason` 取值：`done`（正常完成）/ `dead_letter_exhausted`（死信队列兜底停，横向 `failed_tasks>=5` 或纵向 `dlq_split_count>=30` 任一触发，需人工介入）。
+
 判 watch 卡死：`last_heartbeat_at` 比当前时间老超过 60 分钟且 `status=running` → watch 可能卡死（进程没崩但 query 挂死），需人工介入或重启。`last_tick_at` tick 期间冻结，不能单独判卡死。
 
 ### events.jsonl（append-only 审计流）
 
 每行一个事件：`{"ts":"...","type":"task_completed","tick_id":"...","loop_count":15,"data":{...}}`
 
-事件类型：`tick_started` / `tick_completed` / `task_completed` / `task_stall` / `task_blocked` / `session_dropped` / `aborted` / `done` / `suspected_false_completion` / `compact_probe_ok` / `compact_probe_failed` 等。
+事件类型：`tick_started` / `tick_completed` / `task_completed` / `task_stall` / `task_blocked` / `session_dropped` / `aborted` / `done` / `suspected_false_completion` / `compact_probe_ok` / `compact_probe_failed` / `task_to_dlq` / `bootstrap_to_dlq` / `task_split` / `task_failed` / `dead_letter_exhausted` 等。
 
 **判崩溃**：`tick_started` 无同 `tick_id` 的 `tick_completed` = 该 tick 崩溃。
 
@@ -135,5 +140,6 @@ cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow.env && chmod 600
 ## 已知行为
 
 - **bootstrap 慢属正常**：目标里若含 SPA 链接（腾讯文档等），WebFetch 拿不到表格数据，worker 会写 Playwright 脚本爬取——可能耗时 10+ 分钟但最终能成。别手动预写 `.task.md`（自己拆的任务可能不符合 goal 结构）。
-- **项目已 done 后跑新缺陷**：直接重启会被 `state.json` 的 `last_termination={reason:"done"}` 挡掉（tick 直接 already_terminated 跳过）。要继续跑，清掉 `state.json` 的 `last_termination` 字段（置 `null`）或换新 goal 触发重新 bootstrap。
+- **项目已 done 后跑新缺陷**：直接重启会被 `state.json` 的 `last_termination={reason:"done"}` 挡掉（tick 直接 already_terminated 跳过）。要继续跑，清掉 `state.json` 的 `last_termination` 字段（置 `null`）或换新 goal 触发重新 bootstrap。`dead_letter_exhausted` 同理（兜底停了 watch，清该字段或换 goal 才能重启）。
 - **撞 blocked_suspect 先看探针**：`status=blocked_suspect`（疑假完成）或 `ctx_overflow_retry` 频繁时，查 events.jsonl 有没有 `compact_probe_ok`——有探针压成功说明 ctx 在自我回收；没有就是真撞墙，多半是目标项目上下文太大，可在项目根放 `.claudeignore` 压扫描范围。
+- **死信队列兜底停**：`last_termination=dead_letter_exhausted` 说明任务大到连拆都拆不动（横向 5 个不同 task 各自拆不出 / 纵向拆 30 次还在拆 = 子任务互相依赖死循环）。查 events 的 `task_split` 链看是哪个 task 反复爆，人工拆解或换更小 goal。详见 [docs/dead-letter-design.md](../docs/dead-letter-design.md)。
