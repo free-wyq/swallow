@@ -1,6 +1,6 @@
 # 死信队列 + lazy 拆：史诗级任务设计
 
-> 状态：**已实现 + e2e 全绿**（2026-07-25，`orchestrator.ts` +288 行，`tsc --noEmit` 通过）。可观测契约见 [dead-letter-observability.md](./dead-letter-observability.md)。
+> 状态：**已实现 + e2e 全绿**（2026-07-25，`orchestrator.ts` +288 行，`tsc --noEmit` 通过）。可观测契约见 [observability.md](./observability.md) §3.8。
 >
 > 历史背景：抓包 13 轮 0 爆时本设计是"等真撞墙照着实现的蓝图"；现按用户决定提前全量落地（goal/task 对称统一），e2e 三组验证通过——兜底停 watch（确定性）/ smoke 回归（真跑 bootstrap→done）/ 死信出队链路（真跑 splitTask 拆 5 项→插入→commit）。
 >
