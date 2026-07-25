@@ -180,7 +180,7 @@ goal G 太大爆 → 入死信队列 type=goal
 ```
 
 ```typescript
-async function bootstrapTasks(goal: string) {
+async function bootstrapTasks(goal: string, append = false) {
   const q = query({ prompt: `... 同现状 + 末尾输出 <!-- END_OF_TASKS -->`, options: {...} });
   let text = "";
   let bootstrapOverflow = false;
@@ -203,7 +203,15 @@ async function bootstrapTasks(goal: string) {
     writeStateJsonAtomic(s);
     return;   // 不 process.exit(1)，让 watch 继续跑处理死信队列（§6.3 出队逐个独立 bootstrap）
   }
-  writeFileSync(TASK_FILE, taskLines.join("\n") + "\n");
+  // append=true：死信队列 goal 分流逐个独立 bootstrap 时——子 goal 拆出的 task 追加进 .task.md，
+  // 不覆盖前面子 goal 已写的任务（旧 writeFileSync 覆盖写是 bug，会把前几个子 goal 的 task 冲掉）。
+  // 主路径（初始 bootstrap）默认 false 覆盖写合理（新 goal 重拆）。
+  if (append && existsSync(TASK_FILE)) {
+    const prev = readFileSync(TASK_FILE, "utf8").replace(/\n+$/, "");
+    atomicWriteFile(TASK_FILE, (prev ? prev + "\n" : "") + taskLines.join("\n") + "\n");
+  } else {
+    atomicWriteFile(TASK_FILE, taskLines.join("\n") + "\n");
+  }
   ...
 }
 ```
@@ -245,7 +253,7 @@ if (state.dead_letter.length > 0) {
     // 子 goal：逐个独立 bootstrap（各自拆成 task 列表写进 .task.md）
     appendEvent("task_split", { content: item.content, child_count: children.length, type: "goal" });
     for (const subGoal of children) {
-      await bootstrapTasks(subGoal);   // 独立 bootstrap，拆出的 task 追加进 .task.md
+      await bootstrapTasks(subGoal, true);   // append=true：子 goal 拆出的 task 追加进 .task.md，不覆盖前面子 goal 已写的
       // ⚠️ 独立 bootstrap 自己爆了？bootstrapTasks 内部已处理（§6.2 再入死信队列 type=goal），同构递归
     }
   } else {
@@ -388,5 +396,13 @@ Layer 3 只在 Layer 0/1/2 都压不住、真撞 ctx_overflow 截断时触发。
 ```
 
 **已验证**：goal/task 对称的 task 侧路径（出队→拆→插回→跑→commit）。**未单独验证**：goal 型出队（子 goal 独立 bootstrap）、`failed_tasks>=5` 横向兜底、bootstrap 截断入队——这几条是确定性逻辑（seed 即可触发，无需真跑 SDK），C 测试已覆盖同款兜底机制，逻辑对称可推。真上后若撞 goal 爆可补 goal 型 e2e。
+
+### 13.1 append 修复 + goal 型 e2e（2026-07-25）
+
+**发现的 bug**：goal 分流逐个调 `bootstrapTasks(subGoal)`，注释写"追加进 .task.md"，但 `bootstrapTasks` 末尾是 `writeFileSync(TASK_FILE, ...)`（覆盖写）。N 个子 goal 跑完 `.task.md` 只剩最后一个的 task，前面全丢——主路径（初始 bootstrap 只调一次）无此问题，只 goal 型出队循环调时中招。
+
+**修法**：`bootstrapTasks(goal, append=false)` 加 append 参数。`append=true` 时读现有 `.task.md` 末尾去空行后拼接新 task（用 `atomicWriteFile` 原子写）；主路径默认 false 覆盖写不变。goal 分流调 `bootstrapTasks(subGoal, true)`。
+
+**goal 型 e2e（测试 D）**：seed 一个会拆成多子 goal 的 goal（"分别创建 a.txt 和 b.txt 两个独立文件"）进死信队列，真跑 splitTask→goal 分流→逐个 bootstrap。核心断言：`.task.md` 同时含两个子 goal 拆出的 task（a.txt 和 b.txt 都在）——旧覆盖 bug 会只剩最后一个，另一个 grep 不到。
 
 **测试脚本不进仓**（仓库从无测试框架，沿用临时仓真跑惯例）。可复现：seed state.json 的 `dead_letter`/`dlq_split_count` 字段 + `--watch` 跑，看 events 的 `task_split`/`dead_letter_exhausted` 事件链。

@@ -313,6 +313,12 @@ function buildPrompt(taskLine: string): string {
 5. 基于最佳实践自行推断，绝不索要额外信息。宁可基于合理假设推进，也不要停下来等。
 6. 遇到报错或失败，自己排查、自己修，不要向用户求助。
 
+## 项目记忆索引（按需读，别全读）
+下方是本项目 .claude/memory/ 里已有的累积知识索引（每行一条：文件名 — 一句话摘要）。
+**只 Read 任务涉及的那块**，不要全读——大文件全读会撑爆上下文。
+任务和所有索引都不相关就跳过本节，直接干活。
+${formatMemoryIndex()}
+
 ## 已完成检测（防假完成）
 「该任务对应的代码可能已存在」≠「已实现完整」。必须区分：
 - ✅ 实现完整：目标函数有真实业务逻辑（非 pass / 非 NotImplementedError 占位 / 非 docstring+pass）。
@@ -326,12 +332,12 @@ function buildPrompt(taskLine: string): string {
 ## 流程
 1. 【必做第一步·已完成检测】Read/Grep 检查目标文件是否已存在且实现完整。完整→直接结束本轮。不完整→继续。
 2. 读 .task.md 确认第一个未完成任务与上面一致。
-3. 读 .claude/memory/ 了解项目背景（架构/约定/模块边界）。
+3. 看「项目记忆索引」里哪块和本任务相关 → Read 那个记忆文件了解背景（无关就跳过）。
 4. 执行任务（代码写到文件）。遇到决策点自己拍板。
 
 ## 上下文预算（防撑爆，尤其代理模型上下文有限）
 - 只读与当前任务直接相关的文件，不要扫全项目、不要批量 Read 源码树。
-- 复用 .claude/memory/ 里已有的项目背景，不要重新探索。
+- 记忆按索引按需读全文，别全读——大文件全读会撑爆上下文。
 - 大文件用 Grep 定位再按行 Read，别整文件打开。
 - 优先 grep/ls 验证再决定读不读，避免把无关文件灌进上下文。
 
@@ -766,7 +772,7 @@ async function tick(): Promise<TickOutcome> {
         appendEvent("task_split", { content: item.content, child_count: children.length, type: "goal" }, { tick_id: tickId, loop_count: state.loop_count });
         log(`📦 子 goal 拆出 ${children.length} 项，逐个独立 bootstrap`);
         for (const subGoal of children) {
-          await bootstrapTasks(subGoal);   // 独立 bootstrap，拆出的 task 追加进 .task.md
+          await bootstrapTasks(subGoal, true);   // append=true：子 goal 拆出的 task 追加进 .task.md，不覆盖前面子 goal 已写的
           // ⚠️ 独立 bootstrap 自己爆了？bootstrapTasks 内部已处理（§6.2 再入死信队列 type=goal），同构递归
         }
       } else {
@@ -1182,6 +1188,36 @@ function surveyProjectTree(): string {
 
 // 读最高价值的现成知识喂给 bootstrap。CLAUDE.md → memory 累积记忆（这是「已知」，直接给）。
 // 给完基线后不锁死——剩余细节模型按需自己探索（prompt 说明），而不是无脑全扫。
+// 记忆索引：扫 .claude/memory/*.md 取 frontmatter 的 name+description，拼成一行一条的索引。
+// 给 worker prompt 用——worker 看索引知道有什么知识存在，按需 Read 那个文件，不全读（防爆）。
+// frontmatter 解析极简：只认 `^name:` 和 `^description:` 两个键，没有就退回用文件名。
+// 没记忆/没 .claude/memory → 返回空串（prompt 里那节就显示"（无累积记忆）"）。
+function formatMemoryIndex(): string {
+  if (!existsSync(MEMO_DIR)) return "（项目无 .claude/memory/，跳过本节）";
+  let files: string[] = [];
+  try { files = readdirSync(MEMO_DIR).filter((f) => f.endsWith(".md")).sort(); }
+  catch { return "（项目无 .claude/memory/，跳过本节）"; }
+  if (files.length === 0) return "（无累积记忆，跳过本节）";
+  const lines: string[] = [];
+  for (const f of files) {
+    let name = f.replace(/\.md$/, "");
+    let desc = "";
+    try {
+      const text = readFileSync(`${MEMO_DIR}/${f}`, "utf8");
+      // 只解析首个 frontmatter 块（--- ... ---）
+      const fm = text.match(/^---\n([\s\S]*?)\n---/);
+      if (fm) {
+        const n = fm[1].match(/^name:\s*(.+)$/m);
+        const d = fm[1].match(/^description:\s*(.+)$/m);
+        if (n) name = n[1].trim();
+        if (d) desc = d[1].trim();
+      }
+    } catch { /* 读取失败用文件名兜底 */ }
+    lines.push(`- .claude/memory/${f} — ${desc || name}`);
+  }
+  return lines.join("\n");
+}
+
 function loadProjectKnowledge(): string {
   const parts: string[] = [];
   if (existsSync("CLAUDE.md")) {
@@ -1206,7 +1242,7 @@ function loadProjectKnowledge(): string {
   return text;
 }
 
-async function bootstrapTasks(goal: string) {
+async function bootstrapTasks(goal: string, append = false) {
   log("首次运行，拆解任务...");
   log(`目标：${goal}`);
   const knowledge = loadProjectKnowledge();
@@ -1274,12 +1310,19 @@ ${knowledge}
     return;   // 不 process.exit(1)，让 watch 继续跑处理死信队列（§6.3 出队逐个独立 bootstrap）
   }
 
-  writeFileSync(TASK_FILE, taskLines.join("\n") + "\n");
+  // append=true：死信队列 goal 分流逐个独立 bootstrap 时——子 goal 拆出的 task 追加进 .task.md
+  // （不覆盖前面子 goal 已写的任务）。主路径（初始 bootstrap）默认 false 覆盖写合理（新 goal 重拆）。
+  if (append && existsSync(TASK_FILE)) {
+    const prev = readFileSync(TASK_FILE, "utf8").replace(/\n+$/, "");
+    atomicWriteFile(TASK_FILE, (prev ? prev + "\n" : "") + taskLines.join("\n") + "\n");
+  } else {
+    atomicWriteFile(TASK_FILE, taskLines.join("\n") + "\n");
+  }
   if (taskLines.length === 0) {
     log("❌ 任务拆解失败");
     process.exit(1);
   }
-  log(`✅ 共 ${taskLines.length} 个任务`);
+  log(`✅ 共 ${taskLines.length} 个任务${append ? "（追加进 .task.md）" : ""}`);
 }
 
 // ---------------- 状态 / 报告（改读 state.json + events.jsonl）----------------
