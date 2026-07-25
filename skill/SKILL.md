@@ -101,8 +101,8 @@ swallow --cwd <项目> --resume     # 恢复（删 .stop）
 字段映射：轮数→`loop_count`、剩余/进度→`.task.md`、心跳→`last_heartbeat_at`、空转→`stall_count`、压缩→`compact_probe_ok` 事件。`当前操作`、`启动时间`等细粒度项 swallow 无专字段——从 events 末尾事件 / night_run.log 自行推断。
 
 接入实战（任务执行 + 定时战报 + 微信推送）：
-- [Hermes 实战](../hermes-guide.md)
-- [Claude Code 实战](../claude-code-guide.md)
+- [Hermes 实战](../docs/hermes-guide.md)
+- [Claude Code 实战](../docs/claude-code-guide.md)
 
 ## 注册成当前 agent 的 skill（可选）
 

@@ -100,7 +100,7 @@ swallow 把结果结构化落盘（`state.json` 恢复点 / `events.jsonl` 审�
 
 ### 2.3 战报格式参考
 
-三种场景（推进中 / 有异常 / 全部完成）的参考格式见 [skill/SKILL.md](skill/SKILL.md)。文案/格式/频道全由你定，swallow 只保证结果结构化落盘，不掺和战报生成。
+三种场景（推进中 / 有异常 / 全部完成）的参考格式见 [skill/SKILL.md](../skill/SKILL.md)。文案/格式/频道全由你定，swallow 只保证结果结构化落盘，不掺和战报生成。
 
 ## 常用操作（都对 Hermes 说）
 
