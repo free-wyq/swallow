@@ -137,7 +137,6 @@ while(tick()):
 - 完成判定依赖 `PostToolUse` 钩子捕获引擎实际文件写入事件，非事后 `git diff` 推断
 - `disallowedTools` 排除 `EnterPlanMode` / `AskUserQuestion`，防止进程因等待用户输入而阻塞
 
-架构演进：早期版本通过 `claude -p` 子进程 + 管道 grep stream-json 采集结果；当前版本基于 SDK 的 `query()` 进程内调用，以 `await sdk.query(prompt)` 单行替换了整条管道链路。
 
 #### 2.1.2 崩溃恢复时序
 
