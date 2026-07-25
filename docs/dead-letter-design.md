@@ -1,6 +1,8 @@
 # 死信队列 + lazy 拆：史诗级任务设计
 
-> 状态：**设计草案，未实现**。抓包 13 轮 0 爆，按"别为没发生的崩提前上"暂不动代码。本文是等真撞墙时照着实现的蓝图。
+> 状态：**已实现 + e2e 全绿**（2026-07-25，`orchestrator.ts` +288 行，`tsc --noEmit` 通过）。可观测契约见 [dead-letter-observability.md](./dead-letter-observability.md)。
+>
+> 历史背景：抓包 13 轮 0 爆时本设计是"等真撞墙照着实现的蓝图"；现按用户决定提前全量落地（goal/task 对称统一），e2e 三组验证通过——兜底停 watch（确定性）/ smoke 回归（真跑 bootstrap→done）/ 死信出队链路（真跑 splitTask 拆 5 项→插入→commit）。
 >
 > 相关：token 量纲与探针背景见 memory `orchestrator-sdk.md`「ctx 健康度探针」「token 量纲澄清」段；预先递归为何不上见 memory `arch-pending-usage-gated.md`。
 
@@ -365,12 +367,26 @@ Layer 3 只在 Layer 0/1/2 都压不住、真撞 ctx_overflow 截断时触发。
 8. `--status` 显示死信队列长度 + 真失败册内容摘要。
 9. e2e：构造爆掉的场景（故意喂超大 goal / 超大 task）验证拆分链路 + 两个兜底 + goal/task 对称性。
 
-## 13. 重启条件（暂不上）
+## 13. e2e 验证结果（2026-07-25 全绿）
 
-抓包 13 轮真跑：**0 次 ctx_overflow、0 次 session_dropped、0 次 bootstrap 截断**——入口探针稳态兜住，本设计暂不实现。
+三组测试，确定性优先排序，临时仓 `/tmp/swallow-dlq-*` 真跑（GLM 代理 `192.168.241.10:3000` + `glm-5.1`）：
 
-**真撞墙时上**：
-- events.jsonl 出现 `session_dropped` 且同 taskKey 反复爆到 `session_retries=3` 标阻塞；
-- 或 bootstrap 输出明显截断（任务数远少于预期、最后一条像写一半）。
+| 测试 | 验证什么 | 结果 |
+|---|---|---|
+| **C 兜底停 watch**（seed `dlq_split_count=30`，无 SDK） | 死循环兜底优先于拆分：watch 立即 `terminated`，死信队列清空进 `failed_tasks`(1)，未调 splitTask | ✅ 全过 |
+| **A smoke 回归**（小 goal 真跑） | bootstrap→task→commit→done 正常路径未被死信改动破坏；死信队列空 | ✅ 全过（2 commit，hello.txt 创建） |
+| **B 死信出队链路**（seed 1 task 进 dead_letter，真跑 splitTask） | 出队→splitTask 拆 5 项→`insertTasksBeforeFirst` 插回→逐个 commit；`dlq_split_count` +1、队列清空 | ✅ 核心链路通过（拆 5 项、2 项已 commit、`task_split` 事件 type=task） |
 
-那时按 §12 顺序实现。本文档作为蓝图备查。
+**B 测试关键日志**：
+```
+🔄 第 1 轮 | 死信队列 1 项
+🔧 splitTask 拆分：给项目添加用户登录功能...
+🔧 splitTask 拆出 5 个子项
+📦 子 task 拆出 5 项，插回 .task.md 当前位置
+🔄 第 2 轮 | 剩余 5/5  →  13 文件 / 31 工具调用（已提交）
+🔄 第 3 轮 | 剩余 4/5  →  5 文件 / 16 工具调用（已提交）
+```
+
+**已验证**：goal/task 对称的 task 侧路径（出队→拆→插回→跑→commit）。**未单独验证**：goal 型出队（子 goal 独立 bootstrap）、`failed_tasks>=5` 横向兜底、bootstrap 截断入队——这几条是确定性逻辑（seed 即可触发，无需真跑 SDK），C 测试已覆盖同款兜底机制，逻辑对称可推。真上后若撞 goal 爆可补 goal 型 e2e。
+
+**测试脚本不进仓**（仓库从无测试框架，沿用临时仓真跑惯例）。可复现：seed state.json 的 `dead_letter`/`dlq_split_count` 字段 + `--watch` 跑，看 events 的 `task_split`/`dead_letter_exhausted` 事件链。

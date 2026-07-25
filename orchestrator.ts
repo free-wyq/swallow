@@ -85,6 +85,9 @@ const MAX_TURNS_PER_TASK = UNLIMITED;        // 单任务 agentic 轮上限；0=
 const STALL_LIMIT = 3;                       // 同任务连续零改动 N 次标阻塞
 const ABORT_TIMEOUT_MIN = 60;                // 单任务超 N 分钟无进展则 abort 重试
 const SESSION_RETRY_LIMIT = 3;               // 陷阱7：当前任务连续 session_dropped N 次标阻塞（防 ctx-overflow 死循环）
+// 死信队列兜底（lazy 拆：爆了才拆，不预先递归）
+const FAILED_TASK_LIMIT = 5;                 // 真失败累计达此数 → watch 停（goal 整体太难/太碎）
+const DLQ_SPLIT_LIMIT = 30;                  // splitTask 累计调用达此数 → 死循环兜底，队列清空进 failed_tasks 停
 // bootstrap 同样不限。拆解是大目标，限额易崩成拆解失败。
 const BOOTSTRAP_MAX_TURNS = UNLIMITED;
 // 上下文健康度：上轮 input_tokens 占模型上下文超 CTX_RECYCLE_RATIO → 下轮弃旧会话开新会话
@@ -185,6 +188,41 @@ function blockFirst() {
       return;
     }
   }
+}
+
+// 死信队列专用 helper（dead-letter-design §12 step2）：照 tickFirst/blockFirst 骨架用 splice。
+// removeFirst：从 .task.md 移除第一个未完成任务行（爆掉的 task 入死信队列后调，避免下轮还跑它；
+//   子项由 splitTask 拆出后 insertTasksBeforeFirst 插回原位置）。
+function removeFirst() {
+  if (!existsSync(TASK_FILE)) return;
+  const text = readFileSync(TASK_FILE, "utf8");
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (/^- \[ \]/.test(lines[i])) {
+      lines.splice(i, 1);
+      atomicWriteFile(TASK_FILE, lines.join("\n"));
+      return;
+    }
+  }
+}
+
+// insertTasksBeforeFirst：把子 task 行插到第一个未完成任务之前（保依赖顺序——子项是父项的细化，
+//   应该在当前位置先做完，不能排到队伍后面）。taskLines 传入时已带 "- [ ] " 前缀。
+function insertTasksBeforeFirst(taskLines: string[]) {
+  if (taskLines.length === 0) return;
+  if (!existsSync(TASK_FILE)) {
+    atomicWriteFile(TASK_FILE, taskLines.join("\n") + "\n");
+    return;
+  }
+  const text = readFileSync(TASK_FILE, "utf8");
+  const lines = text.split("\n");
+  let i = 0;
+  for (; i < lines.length; i++) {
+    if (/^- \[ \]/.test(lines[i])) break;
+  }
+  // 在第一个未完成任务行之前插入子项行（保留其后所有任务，含父项的兄弟任务）
+  const newLines = [...lines.slice(0, i), ...taskLines, ...lines.slice(i)];
+  atomicWriteFile(TASK_FILE, newLines.join("\n") + "\n");
 }
 
 // ---------------- git 提交 ----------------
@@ -396,6 +434,14 @@ async function runOneTask(taskLine: string, sessionId: string | null, onHeartbea
 
 // ---------------- state.json + events.jsonl 持久化 ----------------
 
+// 死信队列元素（3 字段）：爆掉的 task/goal 待拆（暂态，出队即移除父项，不做父子追踪——见 dead-letter-design §7）。
+// type 区分爆点：goal=bootstrap 拆任务爆（子项独立 bootstrap）/ task=tick 干活爆（子项插回 .task.md）。两者本质同构。
+interface DeadLetterItem {
+  type: "goal" | "task";
+  content: string;          // 爆掉的原内容（goal 文本 / task 行文本）
+  ts: string;               // 入队时间（本地时间，同 now()）
+}
+
 interface StateJson {
   version: number;
   goal: string;
@@ -407,11 +453,15 @@ interface StateJson {
   status: string;
   last_tick_at: string | null;
   last_tick_id: string | null;
-  last_termination: { reason: "done"; ts: string } | null; // 陷阱4：防完成后续 cron 刷 done
+  last_termination: { reason: "done" | "dead_letter_exhausted"; ts: string } | null; // 陷阱4：防完成后续 cron 刷 done；dead_letter_exhausted=死信队列兜底停
   last_input_tokens: number | null;  // 上轮上下文占用（result.usage.input_tokens），供下轮健康度判定
   ctx_max_tokens: number | null;     // 模型上下文窗口（getContextUsage 捕获一次，稳定）
   last_heartbeat_at: string | null;  // runOneTask 期间节流落盘的心跳（外部 agent 对比它判 watch 卡死）
   event_counts: Record<string, number>;  // 事件累计计数（轮转丢明细不丢计数，--report 读这）
+  // 死信队列（dead-letter-design §4.2）：爆掉的 task/goal 待拆（暂态），failed_tasks=拆到底做不了（终态），dlq_split_count=splitTask 累计调用数（防无限拆死循环）
+  dead_letter: DeadLetterItem[];    // 死信队列（爆掉的 task/goal 待拆，暂态）
+  failed_tasks: DeadLetterItem[];   // 真失败册（拆到底做不了，终态只进不出）
+  dlq_split_count: number;          // splitTask 累计调用次数（防无限拆死循环，达 DLQ_SPLIT_LIMIT 队列清空停）
 }
 
 const DEFAULT_STATE: StateJson = {
@@ -430,6 +480,9 @@ const DEFAULT_STATE: StateJson = {
   ctx_max_tokens: null,
   last_heartbeat_at: null,
   event_counts: {},
+  dead_letter: [],
+  failed_tasks: [],
+  dlq_split_count: 0,
 };
 
 // 陷阱1: 原子写 state.json（write-file-atomic：data fsync + dir fsync，崩溃后元数据不丢，进度数据不可丢）
@@ -617,7 +670,9 @@ type TickOutcome =
   | { kind: "terminated" }
   | { kind: "stopped" }
   | { kind: "already_terminated" }
-  | { kind: "already_running" };
+  | { kind: "already_running" }
+  | { kind: "dead_letter_split" }       // 死信队列出队拆分成功（goal 子项独立 bootstrap / task 子项插回 .task.md）
+  | { kind: "dead_letter_split_failed" };// 死信队列出队但 splitTask 拆不出（自爆，进 failed_tasks，未达 FAILED_TASK_LIMIT 继续）
 
 // 16 步幂等单步：取第一个未完成任务 → runOneTask（核心不变）→ 判定 → 打勾/标阻塞 → commit → 落盘 → exit
 async function tick(): Promise<TickOutcome> {
@@ -644,6 +699,90 @@ async function tick(): Promise<TickOutcome> {
     if (state.last_termination) {
       appendEvent("tick_skipped", { reason: "already_terminated", last_termination: state.last_termination });
       return { kind: "already_terminated" };
+    }
+
+    // 步骤3.5: 死信队列出队处理（dead-letter-design §6.3）——优先于普通任务。
+    // 出队 splitTask → 按 type 分流（goal→独立 bootstrap / task→插回 .task.md）+ 父立即移除 + dlq_split_count++。
+    // 出队后本轮专门拆，不跑 runOneTask（一个 tick 干一件事，清晰易调试）。
+    // 返回 dead_letter_split / dead_letter_split_failed / terminated，watch 收到后下一 tick 继续（tick 本身是单步，
+    // 用 return 替代 continue，效果等价：watch 的 while(true) 会再调一次 tick）。
+    if (state.dead_letter.length > 0) {
+      // 死循环兜底（§6.3）：splitTask 累计调用太多 → 队列清空进 failed_tasks + 停 watch
+      if (state.dlq_split_count >= DLQ_SPLIT_LIMIT) {
+        log(`🚫 splitTask 累计 ${state.dlq_split_count} 次仍没消停，死信队列清空进真失败，停 watch`);
+        appendEvent("dead_letter_exhausted", { split_count: state.dlq_split_count, limit: DLQ_SPLIT_LIMIT }, { tick_id: null, loop_count: state.loop_count });
+        for (const item of state.dead_letter) state.failed_tasks.push(item);
+        state.dead_letter = [];
+        state.last_termination = { reason: "dead_letter_exhausted", ts: now() };
+        state.last_tick_at = now();
+        state.last_heartbeat_at = now();
+        flushPendingCounts(state);
+        writeStateJsonAtomic(state);
+        return { kind: "terminated" };
+      }
+
+      tickId = genTickId();
+      const dlTasks = readTasks();
+      appendEvent("tick_started", { remaining: dlTasks.remaining, total: dlTasks.total, current_task: `[dead_letter:${state.dead_letter[0].type}]`, dead_letter_len: state.dead_letter.length }, { tick_id: tickId, loop_count: state.loop_count + 1 });
+      state.loop_count++;
+      state.status = "running";
+      state.last_tick_at = now();
+      state.last_tick_id = tickId;
+      writeStateJsonAtomic(state);
+      log("━".repeat(60));
+      log(`🔄 第 ${state.loop_count} 轮 | 死信队列 ${state.dead_letter.length} 项 | tick_id=${tickId}`);
+
+      const item = state.dead_letter[0];
+      const children = await splitTask(item.content);   // 拆 N 子项（模型自决）
+      state.dlq_split_count++;
+      state.dead_letter.shift();   // 父项立即移除（不保留父子关系，见 §7）
+
+      if (children.length === 0) {
+        // splitTask 自爆 / 拆不出 → 进真失败册（dead-letter-design §6.3）
+        log(`⚠️ splitTask 拆失败（可能自爆），进真失败：${item.content.slice(0, 80)}`);
+        state.failed_tasks.push(item);
+        appendEvent("task_failed", { content: item.content, reason: "split_failed" }, { tick_id: tickId, loop_count: state.loop_count });
+        state.status = "idle";
+        state.last_tick_at = now();
+        state.last_heartbeat_at = now();
+        // 真失败累计兜底（§6.4）：放这里而非 tick 出口，避免 continue 跳过出口检查导致迟一轮才停
+        if (state.failed_tasks.length >= FAILED_TASK_LIMIT) {
+          log(`🚫 真失败累计 ${state.failed_tasks.length} 个任务，goal 整体太难，停 watch 待人工介入`);
+          appendEvent("dead_letter_exhausted", { failed_count: state.failed_tasks.length, limit: FAILED_TASK_LIMIT }, { tick_id: tickId, loop_count: state.loop_count });
+          state.last_termination = { reason: "dead_letter_exhausted", ts: now() };
+          flushPendingCounts(state);
+          writeStateJsonAtomic(state);
+          appendEvent("tick_completed", { outcome: "terminated" }, { tick_id: tickId, loop_count: state.loop_count });
+          return { kind: "terminated" };
+        }
+        flushPendingCounts(state);
+        writeStateJsonAtomic(state);
+        appendEvent("tick_completed", { outcome: "dead_letter_split_failed" }, { tick_id: tickId, loop_count: state.loop_count });
+        return { kind: "dead_letter_split_failed" };   // watch 继续，下一 tick 再出队
+      }
+
+      // 按 type 分流（goal/task 本质同构，都是"拆出更小的项继续推进"，但落地路径不同）
+      if (item.type === "goal") {
+        // 子 goal：逐个独立 bootstrap（各自拆成 task 列表写进 .task.md）
+        appendEvent("task_split", { content: item.content, child_count: children.length, type: "goal" }, { tick_id: tickId, loop_count: state.loop_count });
+        log(`📦 子 goal 拆出 ${children.length} 项，逐个独立 bootstrap`);
+        for (const subGoal of children) {
+          await bootstrapTasks(subGoal);   // 独立 bootstrap，拆出的 task 追加进 .task.md
+          // ⚠️ 独立 bootstrap 自己爆了？bootstrapTasks 内部已处理（§6.2 再入死信队列 type=goal），同构递归
+        }
+      } else {
+        // 子 task：插回 .task.md 当前位置（保依赖顺序）
+        insertTasksBeforeFirst(children);
+        appendEvent("task_split", { content: item.content, child_count: children.length, type: "task" }, { tick_id: tickId, loop_count: state.loop_count });
+        log(`📦 子 task 拆出 ${children.length} 项，插回 .task.md 当前位置`);
+      }
+      state.status = "idle";
+      state.last_tick_at = now();
+      state.last_heartbeat_at = now();
+      flushPendingCounts(state);
+      writeStateJsonAtomic(state);
+      appendEvent("tick_completed", { outcome: "dead_letter_split" }, { tick_id: tickId, loop_count: state.loop_count });
+      return { kind: "dead_letter_split" };   // watch 继续，下一 tick 跑刚插入的子 task（或继续出队下一个死信项）
     }
 
     // 步骤4: 读 .task.md，取 currentTaskLine，genTickId
@@ -818,9 +957,18 @@ async function tick(): Promise<TickOutcome> {
       if (aborted) appendEvent("aborted", { task: taskKey }, { tick_id: tickId, loop_count: state.loop_count });
       // 不打勾，不标阻塞（除非连续 N 次）
       if (state.session_retries >= SESSION_RETRY_LIMIT) {
-        log(`🚧 连续 ${SESSION_RETRY_LIMIT} 次 session_dropped，标 [~] 阻塞跳过，推进下一任务`);
-        blockFirst();
-        appendEvent("task_blocked", { task: taskKey, reason: "session_retry_limit" }, { tick_id: tickId, loop_count: state.loop_count });
+        if (aborted) {
+          // 看门狗超时：worker 卡死，任务可能不大 → 拆了拆出的子任务照样卡，继续走老 block（dead-letter-design §6.1）
+          log(`🚧 连续 ${SESSION_RETRY_LIMIT} 次 session_dropped（aborted），标 [~] 阻塞跳过，推进下一任务`);
+          blockFirst();
+          appendEvent("task_blocked", { task: taskKey, reason: "aborted_timeout" }, { tick_id: tickId, loop_count: state.loop_count });
+        } else {
+          // ctx_overflow：task 太大一个会话装不下 → 入死信队列等拆（dead-letter-design §6.1）
+          log(`🚧 连续 ${SESSION_RETRY_LIMIT} 次 session_dropped（ctx_overflow），task 太大入死信队列待拆`);
+          state.dead_letter.push({ type: "task", content: taskLine, ts: now() });
+          appendEvent("task_to_dlq", { task: taskKey }, { tick_id: tickId, loop_count: state.loop_count });
+          removeFirst();   // 从 .task.md 移除原任务行（避免下轮还跑它），子项由 splitTask 拆出后插回
+        }
         state.session_retries = 0;
         state.stall_task = null;
         state.stall_count = 0;
@@ -861,6 +1009,16 @@ async function tick(): Promise<TickOutcome> {
     state.last_tick_at = now();
     state.last_heartbeat_at = now();  // tick 出口刷新心跳（与 last_tick_at 对齐，表示本轮刚结束、活着）
     flushPendingCounts(state);        // 把本轮 appendEvent 攒的 pending 计数合并进 state（tick 出口兜底）
+    // 死信兜底（dead-letter-design §6.4）：真失败累计达限 → 停 watch
+    // （出队的拆失败已就地检查；此处兜住其它路径产生的 failed_tasks，如未来扩展）
+    if (state.failed_tasks.length >= FAILED_TASK_LIMIT) {
+      log(`🚫 真失败累计 ${state.failed_tasks.length} 个任务，goal 整体太难，停 watch 待人工介入`);
+      appendEvent("dead_letter_exhausted", { failed_count: state.failed_tasks.length, limit: FAILED_TASK_LIMIT }, { tick_id: tickId, loop_count: state.loop_count });
+      state.last_termination = { reason: "dead_letter_exhausted", ts: now() };
+      writeStateJsonAtomic(state);
+      appendEvent("tick_completed", { outcome: "terminated" }, { tick_id: tickId, loop_count: state.loop_count });
+      return { kind: "terminated" };
+    }
     writeStateJsonAtomic(state);
     const outcome: TickOutcome["kind"] = didRealWork ? "advanced" : (state.stall_count > 0 ? "stalled" : "blocked");
     appendEvent("tick_completed", { outcome }, { tick_id: tickId, loop_count: state.loop_count });
@@ -930,6 +1088,62 @@ function handleSignal(sig: NodeJS.Signals) {
 }
 process.on("SIGTERM", handleSignal);
 process.on("SIGINT", handleSignal);
+
+// ---------------- 死信队列：splitTask（dead-letter-design §5）----------------
+
+// 把爆掉的 task/goal 拆成 N 个子项（N 模型自决——大任务可能 5+ 个、小任务可能 2 个，
+// 不写死任何数字约束，唯一约束是「每个子项能单独会话内完成」）。
+// 输出解析照抄 bootstrapTasks：text.split("\n").filter((l) => /^- \[ \]/.test(l))。
+// query options 照 bootstrapTasks 模式：新会话（不 resume，区别于 probeCompactDeep）、
+// bypassPermissions、disallowedTools 含 EnterPlanMode/ExitPlanMode/AskUserQuestion。
+async function splitTask(content: string): Promise<string[]> {
+  log(`🔧 splitTask 拆分（模型自决子项数）：${content.slice(0, 80)}`);
+  const q = query({
+    prompt: `## 角色
+你是无人值守开发助手。下方给你一个"一次装不下、爆掉了"的 task（或 goal）。把它拆成若干个独立、可单独会话内完成的子 task。
+
+## 铁律
+1. 绝对不要向用户提问任何问题，不要等待确认。
+2. 遇到选择点自己直接做决定。
+3. 子项数量完全由你判断：拆少了下轮还爆就再拆（反馈驱动），拆多了能装下就行。不限制数量。
+4. 唯一约束：每个子 task 要能在单个会话内独立完成（同 bootstrap 小任务约束）。
+5. 子项之间保依赖顺序排列。
+
+## 输出格式（同 bootstrap）
+只输出任务列表，每行一个，不要其它内容：
+- [ ] 子 task 描述
+- [ ] 子 task 描述
+...
+
+## 要拆的内容
+${content}`,
+    options: {
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      maxTurns: hasLimit(BOOTSTRAP_MAX_TURNS) ? BOOTSTRAP_MAX_TURNS : undefined,
+      disallowedTools: ["EnterPlanMode", "ExitPlanMode", "AskUserQuestion"],
+    },
+  });
+  let text = "";
+  for await (const msg of q) {
+    if (msg.type === "result") {
+      const r = msg as SDKResultMessage;
+      text = r.subtype === "success" ? (r.result ?? "") : (r.errors ?? []).join("\n");
+    } else if (msg.type === "assistant") {
+      const content = (msg as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        for (const b of content) {
+          if (b && typeof b === "object" && (b as { type?: string }).type === "text") {
+            text += (b as { text?: string }).text ?? "";
+          }
+        }
+      }
+    }
+  }
+  const taskLines = text.split("\n").filter((l) => /^- \[ \]/.test(l));
+  log(`🔧 splitTask 拆出 ${taskLines.length} 个子项`);
+  return taskLines;
+}
 
 // ---------------- bootstrap：知识优先，按需探索 ----------------
 // 旧设计让 LLM 自己 agentic 探索项目拿上下文 → 要么探索过度爆上下文（Claude Code 拆得准但爆）、
@@ -1012,7 +1226,9 @@ ${knowledge}
 - 输出格式只有任务列表，每行一个：
 - [ ] 任务描述
 - [ ] 任务描述
-...`,
+...
+
+输出完所有任务后，最后单独一行输出哨兵标记 <!-- END_OF_TASKS -->（用于检测输出是否被截断）。`,
     options: {
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
@@ -1022,9 +1238,17 @@ ${knowledge}
     },
   });
   let text = "";
+  let bootstrapOverflow = false;   // ctx_overflow 检测（dead-letter-design §6.2）
   for await (const msg of q) {
     if (msg.type === "result") {
       const r = msg as SDKResultMessage;
+      // ctx_overflow 判定照 tick L806 同款结构化判法（subtype + errors/stop_reason，不 stringify+正则）
+      if (r.subtype === "error_during_execution" && (
+        r.errors?.some((e) => /context|exceed|too long/i.test(e))
+        || /context/i.test(r.stop_reason ?? "")
+      )) {
+        bootstrapOverflow = true;
+      }
       text = r.subtype === "success" ? (r.result ?? "") : (r.errors ?? []).join("\n");
     } else if (msg.type === "assistant") {
       const content = (msg as { content?: unknown }).content;
@@ -1038,6 +1262,19 @@ ${knowledge}
     }
   }
   const taskLines = text.split("\n").filter((l) => /^- \[ \]/.test(l));
+  // 截断检测（dead-letter-design §6.2）：哨兵未出现 = 输出可能被截断，taskLines 数量可能不全。
+  const truncated = !text.includes("<!-- END_OF_TASKS -->");
+
+  if (bootstrapOverflow || truncated) {
+    // goal 太大一次拆不完 → 入死信队列 type=goal，让 splitTask 拆成子 goal 逐个独立 bootstrap（§6.3 出队分流）
+    log(`💥 bootstrap ${bootstrapOverflow ? "ctx_overflow" : `输出截断（${taskLines.length} 个任务可能不完整）`}，goal 入死信队列待拆`);
+    const s = readStateJson();
+    s.dead_letter.push({ type: "goal", content: goal, ts: now() });
+    appendEvent("bootstrap_to_dlq", { goal, reason: bootstrapOverflow ? "ctx_overflow" : "truncate", partial_count: taskLines.length });
+    writeStateJsonAtomic(s);
+    return;   // 不 process.exit(1)，让 watch 继续跑处理死信队列（§6.3 出队逐个独立 bootstrap）
+  }
+
   writeFileSync(TASK_FILE, taskLines.join("\n") + "\n");
   if (taskLines.length === 0) {
     log("❌ 任务拆解失败");
@@ -1060,6 +1297,12 @@ function watchRunning(): { running: boolean; pid: number | null } {
 // 机器可读的结构化状态快照（--status --json 输出）。
 // 把 state.json + .task.md 进度 + watch 进程 + events 末尾汇成单一 JSON 对象，
 // 外部工具（python/awk/jq/任何能读 JSON 的）无需解析人类可读文本即可消费，跨平台零环境依赖。
+// 死信队列摘要（--status 显示用，dead-letter-design §9）：不只计数，人工要看到哪些 task/goal 做不了。
+// 每项截断到 80 字符防刷屏，failed_tasks 全量列（终态只进不出，人工要核实）。
+function summarizeDeadLetter(items: DeadLetterItem[]): { type: string; content: string; ts: string }[] {
+  return items.map((it) => ({ type: it.type, content: it.content.slice(0, 80), ts: it.ts }));
+}
+
 function buildStatusSnapshot() {
   const s = readStateJson();
   const { total, remaining, done, blocked } = readTasks();
@@ -1080,6 +1323,15 @@ function buildStatusSnapshot() {
     stall_limit: STALL_LIMIT,
     session_retries: s.session_retries,
     session_retry_limit: SESSION_RETRY_LIMIT,
+    dead_letter: {
+      queue_len: s.dead_letter.length,
+      dlq_split_count: s.dlq_split_count,
+      dlq_split_limit: DLQ_SPLIT_LIMIT,
+      failed_count: s.failed_tasks.length,
+      failed_task_limit: FAILED_TASK_LIMIT,
+      queue: summarizeDeadLetter(s.dead_letter),     // 待拆（暂态）
+      failed: summarizeDeadLetter(s.failed_tasks),   // 拆到底做不了（终态，人工核实）
+    },
     last_tick_at: s.last_tick_at,
     last_heartbeat_at: s.last_heartbeat_at,
     heartbeat_stale_min: ABORT_TIMEOUT_MIN,
@@ -1115,6 +1367,20 @@ function showStatus(json: boolean) {
   console.log(`stall_task: ${s.stall_task ?? "(无)"}`);
   console.log(`stall_count: ${s.stall_count} / ${STALL_LIMIT}`);
   console.log(`session_retries: ${s.session_retries} / ${SESSION_RETRY_LIMIT}`);
+  // 死信队列（dead-letter-design §9）：队列长度 + splitTask 累计 + 真失败册内容摘要（人工要看到哪些做不了）
+  console.log(`死信队列: ${s.dead_letter.length} 项待拆 | splitTask 累计 ${s.dlq_split_count}/${DLQ_SPLIT_LIMIT} | 真失败 ${s.failed_tasks.length}/${FAILED_TASK_LIMIT}`);
+  if (s.dead_letter.length > 0) {
+    console.log("  待拆（暂态）:");
+    for (const it of s.dead_letter) {
+      console.log(`    [${it.type}] ${it.content.slice(0, 80)} @ ${it.ts}`);
+    }
+  }
+  if (s.failed_tasks.length > 0) {
+    console.log("  真失败（终态，人工核实）:");
+    for (const it of s.failed_tasks) {
+      console.log(`    [${it.type}] ${it.content.slice(0, 80)} @ ${it.ts}`);
+    }
+  }
   console.log(`last_tick_at: ${s.last_tick_at ?? "(无)"}`);
   console.log(`last_heartbeat_at: ${s.last_heartbeat_at ?? "(无)"}${s.last_heartbeat_at ? `（外部 agent 对比当前时间判卡死，阈值 > ${ABORT_TIMEOUT_MIN}min）` : ""}`);
   console.log(`last_tick_id: ${s.last_tick_id ?? "(无)"}`);
@@ -1155,6 +1421,22 @@ function showReport() {
   console.log(`  task_stall: ${countEvents("task_stall")}`);
   console.log(`  session_dropped: ${countEvents("session_dropped")}`);
   console.log(`  aborted: ${countEvents("aborted")}`);
+  // 死信队列事件（dead-letter-design §9）
+  console.log(`  task_to_dlq: ${countEvents("task_to_dlq")}`);
+  console.log(`  bootstrap_to_dlq: ${countEvents("bootstrap_to_dlq")}`);
+  console.log(`  task_split: ${countEvents("task_split")}`);
+  console.log(`  task_failed: ${countEvents("task_failed")}`);
+  console.log(`  dead_letter_exhausted: ${countEvents("dead_letter_exhausted")}`);
+  // 死信队列状态摘要
+  console.log(`\n--- 死信队列 ---`);
+  console.log(`  待拆队列: ${s.dead_letter.length} 项 | splitTask 累计 ${s.dlq_split_count}/${DLQ_SPLIT_LIMIT}`);
+  console.log(`  真失败册: ${s.failed_tasks.length}/${FAILED_TASK_LIMIT}（达限停 watch）`);
+  if (s.failed_tasks.length > 0) {
+    console.log("  真失败内容（终态，人工核实）:");
+    for (const it of s.failed_tasks) {
+      console.log(`    [${it.type}] ${it.content.slice(0, 80)} @ ${it.ts}`);
+    }
+  }
 
   const wr = watchRunning();
   console.log(`\n--watch 进程: ${wr.running ? `运行中 PID=${wr.pid}` : "未运行"}`);
