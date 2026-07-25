@@ -28,7 +28,7 @@ flowchart TB
     Start([用户 goal]) --> Bootstrap["① bootstrap 拆任务"]
     Bootstrap --> Check1{"爆了吗?"}
     Check1 -->|"❌ 不爆"| TaskFile[(".task.md 任务列表")]
-    Check1 -->|"💥 爆/截断"| Stop1["watch 停·人工介入<br/>goal 太大，手拆里程碑（Layer 1）"]
+    Check1 -->|"💥 爆/截断"| EnG["入死信队列 type=goal"]
 
     TaskFile --> RunTask["② tick runOneTask"]
     RunTask --> Check2{"爆了吗?"}
@@ -38,9 +38,13 @@ flowchart TB
     Check2 -->|"💥 ctx_overflow 达限"| Enqueue["入死信队列<br/>移除原任务行"]
 
     Enqueue --> DLQ[("state.dead_letter")]
-    DLQ --> Split["splitTask 拆子 task<br/>N 模型自决"]
-    Split --> Insert["子 task 插回 .task.md 当前位置<br/>父项立即移除队列<br/>dlq_split_count++"]
+    EnG --> DLQ
+    DLQ --> Split["splitTask 拆子项<br/>N 模型自决"]
+    Split --> Dispatch{"type?"}
+    Dispatch -->|"task"| Insert["子 task 插回 .task.md 当前位置<br/>父项立即移除队列<br/>dlq_split_count++"]
+    Dispatch -->|"goal"| Bootstrap2["子 goal 逐个独立 bootstrap<br/>拆成 task 列表写进 .task.md<br/>父项立即移除队列<br/>dlq_split_count++"]
     Insert --> TaskFile
+    Bootstrap2 --> TaskFile
 
     Split -->|"拆不出/自爆"| Fail1["进 failed_tasks"]
     DLQ -.->|"dlq_split_count >= 30"| Fail2["队列清空进 failed_tasks<br/>watch 停"]
@@ -51,20 +55,21 @@ flowchart TB
 
 ## 4. 数据结构
 
-### 4.1 死信队列元素（极简 2 字段）
+### 4.1 死信队列元素（3 字段）
 
 存 `state.dead_letter` 数组（跟 `event_counts` 同模式：原子写一起、`--status` 能看、崩溃恢复靠现有 state.json 原子写）。不另开文件——多一个文件多一个崩坏面。
 
 ```typescript
 interface DeadLetterItem {
-  content: string;   // 爆掉的 task 行原文
-  ts: string;        // 入队时间（本地时间，同 now()）
+  type: "goal" | "task";   // 爆点类型：goal=bootstrap 拆任务爆，task=tick 干活爆。出队后处理路径不同（见 §6.3）
+  content: string;         // 爆掉的原内容（goal 文本 / task 行文本）
+  ts: string;              // 入队时间（本地时间，同 now()）
 }
 ```
 
-**为什么不要 type / reason / split_depth / parent_id / child_ids**：
-- `type`：MVP 死信队列只装 task（goal 爆直接停，见 §6.2），无需区分。
-- `reason`：爆因（ctx_overflow / 截断 / 自爆）记在 events.jsonl 事件里，队列只管"待拆的内容"，职责分离。
+**为什么 3 字段够、不要更多**：
+- `type` 必须：goal 和 task 出队后处理路径不同（goal 子项独立 bootstrap、task 子项插回 .task.md），要区分。两者本质同构（都是"一次装不下"），但处理分流点不同。
+- `reason` 不要：爆因（ctx_overflow / 截断 / 自爆）记在 events.jsonl 事件里，队列只管"待拆的内容"，职责分离。
 - `split_depth` / `parent_id` / `child_ids`：父子追踪整摊砍掉（见 §7）——死循环兜底用全局计数替代，不依赖 depth 继承。
 
 ### 4.2 state.json 扩展（3 个新字段）
@@ -145,7 +150,7 @@ if (aborted || isCtxOverflow) {
       appendEvent("task_blocked", { reason: "aborted_timeout" });
     } else {
       // ctx_overflow：task 太大一个会话装不下 → 入死信队列等拆
-      state.dead_letter.push({ content: taskLine, ts: now() });
+      state.dead_letter.push({ type: "task", content: taskLine, ts: now() });
       appendEvent("task_to_dlq", { task: taskKey });
       removeFirst();   // 从 .task.md 移除原任务行（避免重复推进），子项由 splitTask 插回
     }
@@ -157,11 +162,20 @@ if (aborted || isCtxOverflow) {
 }
 ```
 
-### 6.2 bootstrap 爆 → 直接停 watch（改 `bootstrapTasks` + 加截断检测）
+### 6.2 bootstrap 爆 → 入死信队列 type=goal（改 `bootstrapTasks` + 加截断检测）
 
 **现状缺口**：`orchestrator.ts:1040-1045` 只 `length===0` 报错，截断静默丢。**这是上本设计的必要前提，不是可选。**
 
-**MVP 策略：goal 爆不自动拆**（goal→子goal 要嵌套 bootstrap，复杂）。goal 太大的解法是 Layer 1——用户手拆里程碑（纯用法）。bootstrap 爆 = 这个 goal 跑不起来，直接停 watch 让人工介入：
+**和 tick 爆对称**：bootstrap 爆和 tick 爆本质都是"一次装不下"，共同解法都是"爆了拆小"。goal 拆出的子 goal 各自独立 bootstrap（拆成 task 列表写进 .task.md），和 task 拆出子 task 同构——不需要嵌套特殊机制：
+
+```
+goal G 太大爆 → 入死信队列 type=goal
+出队 splitTask → G1 G2 G3（子 goal）
+  G1 → 独立 bootstrap → 拆成 task 列表 → 插回 .task.md 跑
+  G2 → 独立 bootstrap → ...
+  G3 → 独立 bootstrap → ...
+子 goal 的 bootstrap 再爆？再入死信队列继续拆——和 task 完全同构，全局计数兜底。
+```
 
 ```typescript
 async function bootstrapTasks(goal: string) {
@@ -179,22 +193,20 @@ async function bootstrapTasks(goal: string) {
   const taskLines = text.split("\n").filter((l) => /^- \[ \]/.test(l));
 
   if (bootstrapOverflow || truncated) {
-    // goal 太大一次拆不完 → 直接停 watch，提示人工手拆里程碑（Layer 1）
-    log(`💥 bootstrap ${bootstrapOverflow ? "ctx_overflow" : `输出截断（${taskLines.length} 个任务可能不完整）`}，goal 太大，停 watch 待人工手拆里程碑`);
-    appendEvent("bootstrap_failed", { goal, reason: bootstrapOverflow ? "ctx_overflow" : "truncate", partial_count: taskLines.length });
+    // goal 太大一次拆不完 → 入死信队列 type=goal，让 splitTask 拆成子 goal 逐个独立 bootstrap
+    log(`💥 bootstrap ${bootstrapOverflow ? "ctx_overflow" : `输出截断（${taskLines.length} 个任务可能不完整）`}，goal 入死信队列待拆`);
     const s = readStateJson();
-    s.last_termination = { reason: "bootstrap_failed", ts: now() };
+    s.dead_letter.push({ type: "goal", content: goal, ts: now() });
+    appendEvent("bootstrap_to_dlq", { goal, reason: bootstrapOverflow ? "ctx_overflow" : "truncate", partial_count: taskLines.length });
     writeStateJsonAtomic(s);
-    process.exit(1);   // 同现状失败语义，但先落 state + 事件让人工看到原因
+    return;   // 不 process.exit(1)，让 watch 继续跑处理死信队列（§6.3 出队逐个独立 bootstrap）
   }
   writeFileSync(TASK_FILE, taskLines.join("\n") + "\n");
   ...
 }
 ```
 
-> 扩展点（非 MVP）：未来若要 goal 自动拆，把这里的 `process.exit(1)` 换成"入死信队列 type=goal，splitTask 拆成子 goal 逐个独立 bootstrap"。但那要处理子 goal 嵌套 bootstrap 再爆的递归，复杂度跳一档，MVP 不做。
-
-### 6.3 死信队列出队 → splitTask 拆（tick 入口，step3 后 step4 前）
+### 6.3 死信队列出队 → splitTask 拆 + 按 type 分流（tick 入口，step3 后 step4 前）
 
 Explore 确认插入点：tick 已持 flock（L625）、`currentTaskLine()`（L651）是"下一个跑啥"的唯一决策点。死信队列优先于普通任务：
 
@@ -207,14 +219,13 @@ if (state.dead_letter.length > 0) {
     appendEvent("dead_letter_exhausted", { split_count: state.dlq_split_count, limit: DLQ_SPLIT_LIMIT });
     for (const item of state.dead_letter) state.failed_tasks.push(item);
     state.dead_letter = [];
-    const s2 = readStateJson();
-    s2.last_termination = { reason: "dead_letter_exhausted", ts: now() };
-    writeStateJsonAtomic(s2);
+    state.last_termination = { reason: "dead_letter_exhausted", ts: now() };
+    writeStateJsonAtomic(state);
     return { kind: "terminated" };   // watch 收到 terminated 会 break 退出
   }
 
   const item = state.dead_letter[0];
-  const children = await splitTask(item.content);   // 拆 N 子 task（模型自决）
+  const children = await splitTask(item.content);   // 拆 N 子项（模型自决，大任务 5+、小任务 2）
   state.dlq_split_count++;
   state.dead_letter.shift();   // 父项立即移除（不保留父子关系，见 §7）
 
@@ -227,15 +238,27 @@ if (state.dead_letter.length > 0) {
     continue;   // 下一 tick 继续出队
   }
 
-  // 拆成功 → 子 task 插回 .task.md 当前位置（保依赖顺序）
-  insertTasksBeforeFirst(children);
-  appendEvent("task_split", { content: item.content, child_count: children.length });
+  // 按 type 分流（goal/task 本质同构，都是"拆出更小的项继续推进"，但落地路径不同）
+  if (item.type === "goal") {
+    // 子 goal：逐个独立 bootstrap（各自拆成 task 列表写进 .task.md）
+    appendEvent("task_split", { content: item.content, child_count: children.length, type: "goal" });
+    for (const subGoal of children) {
+      await bootstrapTasks(subGoal);   // 独立 bootstrap，拆出的 task 追加进 .task.md
+      // ⚠️ 独立 bootstrap 自己爆了？bootstrapTasks 内部已处理（§6.2 再入死信队列 type=goal），同构递归
+    }
+  } else {
+    // 子 task：插回 .task.md 当前位置（保依赖顺序）
+    insertTasksBeforeFirst(children);
+    appendEvent("task_split", { content: item.content, child_count: children.length, type: "task" });
+  }
   writeStateJsonAtomic(state);
-  continue;   // 下一 tick 跑刚插入的子 task
+  continue;   // 下一 tick 跑刚插入的子 task（或继续出队下一个子 goal）
 }
 ```
 
 出队后本轮专门拆，**不跑 runOneTask**（一个 tick 干一件事，清晰易调试）。
+
+**goal 和 task 的对称性**：两者都是"一次装不下 → 拆更小的项继续"。区别只在子项落地——task 子项直接插 .task.md 跑，goal 子项要先 bootstrap 拆成 task。再爆都走同一条路（再入死信队列），全局计数统一兜底，无需特殊处理。
 
 ### 6.4 真失败累计停 watch
 
@@ -301,12 +324,12 @@ task A 爆 → session_retries 满限 → 入死信队列
 | 事件 | 触发 | data |
 |---|---|---|
 | `task_to_dlq` | tick 爆达限入死信队列 | `{task}` |
-| `task_split` | splitTask 拆出子项 | `{content, child_count}` |
+| `bootstrap_to_dlq` | bootstrap 爆/截断入死信队列 | `{goal, reason, partial_count}` |
+| `task_split` | splitTask 拆出子项 | `{content, child_count, type}` |
 | `task_failed` | splitTask 自爆 / 拆不出 | `{content, reason: "split_failed"}` |
-| `bootstrap_failed` | bootstrap 爆/截断，goal 太大停 watch | `{goal, reason, partial_count}` |
 | `dead_letter_exhausted` | 真失败累计达限 / splitTask 调用超限，watch 停 | `{failed_count \| split_count, limit}` |
 
-`--status` 加显示：死信队列长度 + 真失败册内容摘要（不只计数——人工要看到哪些 task 做不了）。
+`--status` 加显示：死信队列长度 + 真失败册内容摘要（不只计数——人工要看到哪些 task/goal 做不了）。
 
 ## 10. 不做（边界）
 
@@ -315,8 +338,7 @@ task A 爆 → session_retries 满限 → 入死信队列
 - **不改 .task.md 格式**：子 task 就是普通 `- [ ]` 行插回 flat 列表，state.json 不感知层级。真失败不进 .task.md 第四种勾 `[!]`——进 `state.failed_tasks`，语义与进度分离。
 - **不动 runOneTask 内核**：query + PostToolUse hook + 看门狗不变，只在它出口加"爆了入队"分支。
 - **不解决 aborted**：看门狗超时（worker 卡死）继续走老 block，不拆。
-- **不做 goal 自动拆**：MVP goal 爆直接停 watch（§6.2），goal 太大的解法是 Layer 1 用户手拆里程碑。未来扩展点见 §6.2 备注。
-- **不做跨子 task 协调**：子 task 插回当前位置靠顺序缓解兄弟协调，不做依赖声明语言。
+- **不做跨子项协调**：子 task 插回当前位置靠顺序缓解兄弟协调，子 goal 独立 bootstrap 不交叉，不做依赖声明语言。
 
 ## 11. 与现有机制的层次关系
 
@@ -333,15 +355,15 @@ Layer 3 只在 Layer 0/1/2 都压不住、真撞 ctx_overflow 截断时触发。
 
 ## 12. 实现顺序（真上时）
 
-1. 加 `DeadLetterItem` interface（2 字段）+ `state.dead_letter` / `state.failed_tasks` / `state.dlq_split_count` 字段 + `DEFAULT_STATE` + `readStateJson` 兼容（自动向前，旧 state 缺字段补默认）。
+1. 加 `DeadLetterItem` interface（3 字段：type/content/ts）+ `state.dead_letter` / `state.failed_tasks` / `state.dlq_split_count` 字段 + `DEFAULT_STATE` + `readStateJson` 兼容（自动向前，旧 state 缺字段补默认）。
 2. 加 `removeFirst` / `insertTasksBeforeFirst`（.task.md helper，照 `tickFirst` L165-175 骨架 splice）。
-3. bootstrap 截断检测（sentinel `<!-- END_OF_TASKS -->`）+ ctx_overflow 检测 → 爆了停 watch + `bootstrap_failed` 事件（`bootstrapTasks` 改）。
-4. tick L811 分流 aborted/ctx_overflow → ctx_overflow 达限入死信队列 + `removeFirst`（`tick` 改，替代原 `blockFirst()`）。
+3. bootstrap 截断检测（sentinel `<!-- END_OF_TASKS -->`）+ ctx_overflow 检测 → 爆了入死信队列 type=goal + `bootstrap_to_dlq` 事件（`bootstrapTasks` 改，不 `process.exit(1)`）。
+4. tick L811 分流 aborted/ctx_overflow → ctx_overflow 达限入死信队列 type=task + `removeFirst`（`tick` 改，替代原 `blockFirst()`）。
 5. 加 `splitTask` query 调用点（照 `bootstrapTasks` 模式，新会话不 resume，输出解析照抄 `text.split("\n").filter((l) => /^- \[ \]/.test(l))`）。
-6. tick 入口加死信队列出队处理（§6.3）：splitTask → 子 task 插回 + 父立即移除 + `dlq_split_count++`；自爆 → 进 `failed_tasks`。
+6. tick 入口加死信队列出队处理（§6.3）：splitTask → 按 type 分流（goal→独立 bootstrap / task→插回 .task.md）+ 父立即移除 + `dlq_split_count++`；自爆 → 进 `failed_tasks`。
 7. 两个兜底：`failed_tasks.length >= FAILED_TASK_LIMIT` / `dlq_split_count >= DLQ_SPLIT_LIMIT` → watch 停 + `last_termination=dead_letter_exhausted` + `dead_letter_exhausted` 事件。
 8. `--status` 显示死信队列长度 + 真失败册内容摘要。
-9. e2e：构造爆掉的场景（故意喂超大 task）验证拆分链路 + 两个兜底。
+9. e2e：构造爆掉的场景（故意喂超大 goal / 超大 task）验证拆分链路 + 两个兜底 + goal/task 对称性。
 
 ## 13. 重启条件（暂不上）
 
