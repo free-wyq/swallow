@@ -55,6 +55,8 @@ flowchart TB
       BOOT["bootstrap 拆任务 · query()"]
       TICK["tick 幂等单步 · while 循环"]
       RUN["runOneTask · query()"]
+      SPLIT["splitTask 拆子项 · query()（爆才调）"]
+      DLQ[("state.dead_letter<br/>死信队列 lazy 拆")]
       SDK["claude-agent-sdk（npm 包）"]
       CLI["claude 引擎（随 SDK 打包）"]
       BOOT --> TICK
@@ -62,6 +64,10 @@ flowchart TB
       RUN --> SDK
       SDK -->|"spawn 子进程"| CLI
       CLI -.->|"PostToolUse 回调"| RUN
+      RUN -->|"ctx_overflow 达限"| DLQ
+      BOOT -->|"爆/截断"| DLQ
+      DLQ --> SPLIT
+      SPLIT -->|"子 task 插回 / 子 goal 独立 bootstrap"| TICK
     end
 
     subgraph EXTBOX["📡 外部 agent / 用户（脚本之外）"]
@@ -93,9 +99,13 @@ flowchart TB
     style CLI fill:#ffe0b2
     style KNOW fill:#e1bee7
     style ENV fill:#fff59d
+    style DLQ fill:#ffccbc,stroke:#bf360c
+    style SPLIT fill:#ffe0b2
 ```
 
 调用链一图看清：**用户/外部 agent** 拉起 `--watch` → orchestrator 脚本的 `runOneTask` 进程内调 **SDK**（`query()`）→ SDK spawn 一个 **claude 引擎**子进程跑工具调用 → 引擎的 `PostToolUse` hook 把真实文件写入事件回调给脚本。**引擎是随 SDK 打包的 `claude` 二进制**（`optionalDependencies` 按平台自动拉，npm install 即装齐），不是系统 `which claude`——用户无需另装 Claude Code，唯一前提 Node 18+。外部 agent 另起定时**读已落盘结果**（state.json/events.jsonl/.task.md）自行组织发战报，与脚本互不依赖。
+
+**死信队列分支（爆才走）**：runOneTask 撞 ctx_overflow 达限 / bootstrap 爆或截断 → 内容入 `state.dead_letter` → 下 tick 优先出队，`splitTask` 拆子项回插 `.task.md`（task 型）或子 goal 独立 bootstrap（goal 型），拆不出的进 `failed_tasks`。两兜底防死循环：`failed_tasks>=5`（横向，不同 task 各自拆不出累计）/ `dlq_split_count>=30`（纵向，同几个 task 无限拆），达任一即 watch 停。详见 [docs/dead-letter-design.md](docs/dead-letter-design.md)。
 
 四个边界一图看清（虚线=读取/喂入，实线=主推进流）：
 - ⚙️ **主机配置（黄框）**——`~/.config/swallow.env` 是 Linux/macOS 主机路径（XDG 约定），存密钥 + 代理/模型。不属项目、不属脚本：脚本启动时读进 env，已 export 的不覆盖。限额写死在脚本（见橙框），不在这。
@@ -151,7 +161,7 @@ cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥�
 | `ANTHROPIC_BASE_URL` | 代理才填 | 走代理/中转才填 |
 | `ANTHROPIC_MODEL` 等 | 代理才填 | 走代理时指定模型名 |
 
-**限额不在这里**——写死在 `orchestrator.ts` 顶部常量（token 不限量场景下轮数护栏纯属挡路，一律 `0 = 不限`；行为护栏 `STALL_LIMIT=3` / `ABORT_TIMEOUT_MIN=60` / `SESSION_RETRY_LIMIT=3` 留正数防死循环）。要改改代码，不读 swallow.env。详见 [install.md](install.md)。
+**限额不在这里**——写死在 `orchestrator.ts` 顶部常量（token 不限量场景下轮数护栏纯属挡路，一律 `0 = 不限`；行为护栏 `STALL_LIMIT=3` / `ABORT_TIMEOUT_MIN=60` / `SESSION_RETRY_LIMIT=3` / `FAILED_TASK_LIMIT=5` / `DLQ_SPLIT_LIMIT=30` 留正数防死循环）。要改改代码，不读 swallow.env。详见 [install.md](install.md)。
 
 ## 命令一览
 
@@ -213,7 +223,8 @@ swallow 升级后重跑上述命令刷新 skill 内容。详见 [install.md](ins
 | 原子写 | `write-file-atomic`（data fsync + dir fsync） | state.json/.task.md 写一半被 kill 截断 |
 | 进程级锁 | `proper-lockfile`（stale 60s 自动 takeover） | 多 watch / 手动与 watch 并发冲突；kill -9 残留锁 |
 | 假完成三重校验 | 零改动不打勾 + 连续 3 次空转标阻塞 + 全程零 commit 不退出 | agent 空退/假完成 |
-| ctx-overflow 重试 | 结构化判定（subtype+errors）+ 弃会话重开，连续 3 次标阻塞 | 上下文撑爆死循环 |
+| ctx-overflow 重试 | 结构化判定（subtype+errors）+ 弃会话重开；ctx_overflow 连续 3 次达限入死信队列待拆，aborted 超时仍标阻塞 | 单会话撑爆 / worker 卡死 |
+| 死信队列 + lazy 拆 | **爆了才拆**（反馈驱动，不预先递归）：tick 爆→入队 `type=task`、bootstrap 爆/截断→入队 `type=goal`，`splitTask` 拆子项回插 `.task.md` / 子 goal 独立 bootstrap；两兜底 `failed_tasks>=5`（横向拆不出累计）/ `dlq_split_count>=30`（纵向死循环）→ watch 停 | 任务太大一次装不下、子任务互相依赖无限拆 |
 | ctx 健康度探针 | 上轮 token 占比超 0.7 先发 `/compact deep` 压一轮（取 `compact_metadata.post_tokens` 判定），压不下来再弃会话 | 跨 tick 累积撞墙，avoid 被动等撑爆 |
 | 崩溃检测 | tick_started 与 tick_completed 配对（同 tick_id） | 发现未完成的崩溃 tick |
 | events 轮转 | 超 `EVENTS_ROTATE_LINES`(5000) 行滚动归档 `events.jsonl.1`，累计计数存 `state.event_counts`（丢明细不丢计数） | append-only 长跑涨到几百 MB，读路径变慢/OOM |
@@ -223,7 +234,7 @@ swallow 升级后重跑上述命令刷新 skill 内容。详见 [install.md](ins
 
 | 文件 | 作用 |
 |---|---|
-| `state.json` | 机器读恢复点（原子写）：轮次/空转/commit/终止标记/心跳/事件累计计数 |
+| `state.json` | 机器读恢复点（原子写）：轮次/空转/commit/终止标记/心跳/事件累计计数/**死信队列（dead_letter/failed_tasks/dlq_split_count）** |
 | `events.jsonl` | append-only 审计流，`--status`/`--report` 从它读；超阈值轮转归档 `events.jsonl.1` |
 | `.task.md` | 任务列表 + 勾选状态（`[ ]`/`[x]`/`[~]`）——进度真相源 |
 | `.session_id` | Claude 会话 ID（单源，不进 state.json） |
@@ -231,9 +242,11 @@ swallow 升级后重跑上述命令刷新 skill 内容。详见 [install.md](ins
 | `.tick.lock` | 进程级并发锁 |
 | `night_run.log` | 人类可读文本日志 |
 
-## 上下文管理（SDK 自带 + prompt 节流）
+## 上下文管理（SDK 自带 + prompt 节流 + 爆了拆）
 
 `autoCompactEnabled` 默认 true：上下文快满自动压成摘要，会话不中断、`session_id` 不变。真撑爆了（query 报 `error_during_execution` 含 context）→ 弃会话重开。另外 orchestrator 有主动 ctx 健康度探针：每轮结束记 `input_tokens` + `getContextUsage` 测窗口，下轮若占比超 `CTX_RECYCLE_RATIO(0.7)` 先发 `/compact deep` 压一轮（取 `compact_boundary.compact_metadata.post_tokens` 判定，压不下来再弃旧会话开新会话）。
+
+**探针/重试都兜不住才拆**：连续 3 次 ctx_overflow 达限 → 任务入死信队列，下 tick `splitTask` 拆成可单独完成的子项回插（反馈驱动深度，不预先递归）。bootstrap 爆/截断同理（goal 入队→拆子 goal 独立 bootstrap）。这是最底层兜底，详见 [docs/dead-letter-design.md](docs/dead-letter-design.md)。
 
 ### bootstrap 知识优先 + 按需探索（防拆任务爆上下文）
 
@@ -253,11 +266,11 @@ swallow 升级后重跑上述命令刷新 skill 内容。详见 [install.md](ins
 
 ## 核心机制
 
-- 进程内 `query()`，结构化结果直出（不再 spawn `claude -p` 子进程 grep stream-json）
+- 进程内 `query()`，结构化结果直出（不再 spawn `claude -p` 子进程 grep stream-json）——四个 query 调用点：`bootstrapTasks`（拆任务）/ `runOneTask`（干活，resume 同会话）/ `probeCompactDeep`（ctx 探针）/ `splitTask`（死信队列拆子项，爆才调）
 - `PostToolUse` hook 实时捕获真实文件写入 → 完成判定看真实事件（不靠 `git diff` 猜）
 - `abortController` + `Stop` hook 刷新心跳 → 看门狗事件驱动，不轮询
 - `disallowedTools` 移除 `EnterPlanMode`/`ExitPlanMode`/`AskUserQuestion`（防卡住）
-- 轮数护栏写死在脚本常量、默认 `0 = 不限`（token 不限量场景护栏纯属挡路）；swallow.env 只管密钥/代理/模型
+- 轮数护栏写死在脚本常量、默认 `0 = 不限`（token 不限量场景护栏纯属挡路）；行为护栏 `STALL_LIMIT=3` / `ABORT_TIMEOUT_MIN=60` / `SESSION_RETRY_LIMIT=3` / `FAILED_TASK_LIMIT=5` / `DLQ_SPLIT_LIMIT=30` 留正数防死循环；swallow.env 只管密钥/代理/模型
 - 会话策略：首轮新会话、后续 resume、**永不 continue**（防旧会话污染）
 - 每轮自动 commit（本地不 push），带 Co-Authored-By trailer
 - 日志用本地时间（跟随系统时区 / `TZ`），不再 `toISOString()` 输出 UTC
@@ -269,12 +282,16 @@ swallow 升级后重跑上述命令刷新 skill 内容。详见 [install.md](ins
 - flock 并发：两个 watch 同时，第二个立即 already_running
 - `--stop` 哨兵：watch 收 SIGTERM 退出 + 写 .stop，`--resume` 恢复
 - 假完成守卫：全 `[x]` 零 commit → 疑假完成，不设 last_termination 待人工介入
+- **死信队列 + lazy 拆**（2026-07-25 全绿）：① 兜底停 watch 确定性（seed `dlq_split_count=30` → 队列清空进 failed_tasks、watch 立即 terminated、未调 splitTask）；② smoke 回归（小 goal 真跑 bootstrap→task→commit→done 未被死信改动破坏）；③ 出队链路（seed task 真跑 splitTask 拆 5 项→`insertTasksBeforeFirst` 插回→逐个 commit）。详见 [docs/dead-letter-design.md](docs/dead-letter-design.md) §13
 
 ## 文件
 
 | 文件 | 作用 |
 |---|---|
-| `orchestrator.ts` | 主程序（tick + watch + state/events 持久化） |
+| `orchestrator.ts` | 主程序（tick + watch + state/events 持久化 + 死信队列 lazy 拆） |
+| `docs/dead-letter-design.md` | 死信队列 + lazy 拆设计（已实现 + e2e 全绿） |
+| `docs/observability.md` | 整个工程可观测契约（死信队列是其中 §3.8 一节） |
+| `docs/hermes-guide.md` / `docs/claude-code-guide.md` | 外部 agent 接入实战（拉起 + 定时战报 + 微信推送） |
 | `write-file-atomic.d.ts` | write-file-atomic v7 的 ambient 类型声明 |
 | `package.json` / `tsconfig.json` | 依赖（proper-lockfile + write-file-atomic）与类型配置 |
 
