@@ -245,31 +245,27 @@ bootstrap 拆出来的任务可能仍然太大。三种常规做法都有问题�
 
 #### 2.4.2 死信队列链路
 
-```
-runOneTask 执行中
-    ├── ctx_overflow 连续 3 次 → 入队 (type: task)
-    └── bootstrap 溢出/截断 → 入队 (type: goal)
-                │
-                ▼
-        splitTask 出队拆解
-                │
-          ┌─────┴─────┐
-      task 型        goal 型
-      拆子项          拆子 goal
-      插回 .task.md   独立 bootstrap
-          │              │
-          ▼              ▼
-       继续 tick →→→→ 继续 tick
-                │
-          ┌─────┴─────┐
-      failed_tasks  dlq_split_count
-        >= 5          >= 30
-          │              │
-          └──→ watch 终止 ──┘
+完整架构已在 1.3 展示，下面对焦死信队列分支：
+
+```mermaid
+flowchart LR
+    RUN["runOneTask · query()"]
+    BOOT["bootstrap 拆任务"]
+    DLQ[("state.dead_letter<br/>死信队列")]
+    SPLIT["splitTask 拆子项"]
+    TICK["tick 继续推进"]
+
+    RUN -->|"ctx_overflow 达限"| DLQ
+    BOOT -->|"爆/截断"| DLQ
+    DLQ --> SPLIT
+    SPLIT -->|"子 task 插回 / 子 goal 独立 bootstrap"| TICK
+
+    style DLQ fill:#ffccbc,stroke:#bf360c
+    style SPLIT fill:#ffe0b2
 ```
 
 task 型拆子任务插回 .task.md，goal 型拆子 goal 独立 bootstrap。
-两个兜底：failed_tasks≥5（拆不出的任务太多）或 dlq_split_count≥30（无限拆死循环），都会停 watch。
+两个兜底：`failed_tasks>=5`（拆不出的任务太多）或 `dlq_split_count>=30`（无限拆死循环），停 watch。
 
 #### 2.4.3 设计对比
 
