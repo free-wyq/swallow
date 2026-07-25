@@ -11,13 +11,13 @@
 # 装到 POSIX 中立路径（不进任何 agent 私有目录）：
 #   代码  ~/.local/share/swallow
 #   命令  ~/.local/bin/swallow       (自驱入口，透传参数给 orchestrator.ts)
-#   配置  ~/.config/swallow.env       (密钥/代理/模型，chmod 600)
+#   配置  ~/.config/swallow/swallow.env  (密钥/代理/模型，chmod 600)
 set -euo pipefail
 
 REPO_URL="https://github.com/free-wyq/swallow.git"
 DEST="${SWALLOW_HOME:-$HOME/.local/share/swallow}"
 BIN_DIR="${SWALLOW_BIN:-$HOME/.local/bin}"
-CONF_DIR="${SWALLOW_CONF:-$HOME/.config}"
+CONF_DIR="${SWALLOW_CONF:-$HOME/.config/swallow}"
 
 # 卸载时扫这些 skills 目录清 swallow-scheduler（symlink / 真目录拷贝都清）。
 # 只列常见 agent 作默认、尽力而为；新 agent 不在列表里时，export SWALLOW_SKILL_DIRS=<dir>:<dir>
@@ -65,9 +65,28 @@ check_node() {
   [ "$major" -ge 18 ] || { err "Node 版本过低（$(node -v)，需 18+），请升级后重跑。"; exit 1; }
 }
 
+# 旧版配置散在 ~/.config/swallow.env → 迁到 ~/.config/swallow/swallow.env（XDG 子目录，三件套对称）
+# 旧文件留 .bak 不删（含密钥，防误丢）。新路径已有则不迁（用户可能已手动改过）。
+migrate_legacy_env() {
+  local legacy="$HOME/.config/swallow.env"
+  local new="$CONF_DIR/swallow.env"
+  [ -f "$legacy" ] || return 0
+  if [ -f "$new" ]; then
+    say "检测到旧配置 $legacy，但新路径 $new 已存在——保留新路径，旧文件留作 .bak"
+  else
+    cp "$legacy" "$new"
+    chmod 600 "$new"
+    say "已迁移配置：$legacy → $new（旧文件保留，可手动删）"
+  fi
+  mv "$legacy" "$legacy.bak" 2>/dev/null || true
+}
+
 do_install() {
   check_node
   mkdir -p "$BIN_DIR" "$CONF_DIR"
+
+  # 0. 旧版配置散在 ~/.config/swallow.env → 迁到 ~/.config/swallow/swallow.env（XDG 子目录）
+  migrate_legacy_env
 
   # 1. 拉代码（已有则增量更新，不覆盖本地改动）
   if [ -d "$DEST/.git" ]; then
@@ -140,13 +159,16 @@ do_uninstall() {
     if [ -e "$f" ] || [ -L "$f" ]; then rm -f "$f" "$f.bak"; removed=1; fi
   done
 
-  # 2. swallow.env 含密钥 → 备份再删（不静默抹）
+  # 2. swallow.env 含密钥 → 备份再删（不静默抹）。新路径 ~/.config/swallow/ + 旧散文件 ~/.config/swallow.env 都清。
   local swallow_env="$CONF_DIR/swallow.env"
-  if [ -e "$swallow_env" ]; then
-    mv "$swallow_env" "$swallow_env.bak" 2>/dev/null || rm -f "$swallow_env"
-    say "swallow.env 已备份 → $swallow_env.bak"
-    removed=1
-  fi
+  local legacy_env="$HOME/.config/swallow.env"
+  for e in "$swallow_env" "$legacy_env"; do
+    if [ -e "$e" ]; then
+      mv "$e" "$e.bak" 2>/dev/null || rm -f "$e"
+      say "swallow.env 已备份 → $e.bak"
+      removed=1
+    fi
+  done
 
   # 3. 清各 agent skills 目录里的 swallow-scheduler（symlink 或真目录拷贝都清）
   #    - symlink：只清指向我们 DEST、或因 DEST 已删而悬空的；指向别处的不动

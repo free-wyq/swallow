@@ -108,7 +108,7 @@ flowchart TB
 **死信队列分支（爆才走）**：runOneTask 撞 ctx_overflow 达限 / bootstrap 爆或截断 → 内容入 `state.dead_letter` → 下 tick 优先出队，`splitTask` 拆子项回插 `.task.md`（task 型）或子 goal 独立 bootstrap（goal 型），拆不出的进 `failed_tasks`。两兜底防死循环：`failed_tasks>=5`（横向，不同 task 各自拆不出累计）/ `dlq_split_count>=30`（纵向，同几个 task 无限拆），达任一即 watch 停。详见 [docs/dead-letter-design.md](docs/dead-letter-design.md)。
 
 四个边界一图看清（虚线=读取/喂入，实线=主推进流）：
-- ⚙️ **主机配置（黄框）**——`~/.config/swallow.env` 是 Linux/macOS 主机路径（XDG 约定），存密钥 + 代理/模型。不属项目、不属脚本：脚本启动时读进 env，已 export 的不覆盖。限额写死在脚本（见橙框），不在这。
+- ⚙️ **主机配置（黄框）**——`~/.config/swallow/swallow.env` 是 Linux/macOS 主机路径（XDG 约定），存密钥 + 代理/模型。不属项目、不属脚本：脚本启动时读进 env，已 export 的不覆盖。限额写死在脚本（见橙框），不在这。
 - 📁 **项目边界（绿框）**——`--cwd` 指向的目标项目：已有知识（CLAUDE.md/memory）+ 全部产物（.task.md/state.json/events.jsonl）都落在它目录里，git commit 进它仓库。
 - 🛠️ **脚本边界（橙框）**——swallow orchestrator 本体（`orchestrator.ts` 的 `--watch` 进程）：bootstrap 拆解 + tick 执行是两个独立 `query()`。**限额写死在脚本顶部常量**（token 不限量，轮数护栏纯属挡路 → 一律 0=不限；行为护栏留正数防死循环），不读 swallow.env；swallow.env 只喂密钥/代理/模型。
 - 📡 **外部 agent 边界（蓝框）**——脚本之外的角色（用户 / claw 等）：**拉起** `--watch` 启动推进，另起定时**读已落盘结果**自行组织发战报。与脚本互不依赖（任一方挂了不影响另一方）。
@@ -144,8 +144,8 @@ sequenceDiagram
 curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
 
 # 2. 配密钥（非交互调度器不 source ~/.bashrc，写进 swallow.env 才拿得到）
-cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow.env
-chmod 600 ~/.config/swallow.env   # 编辑填 ANTHROPIC_API_KEY=sk-...（走代理再加 ANTHROPIC_BASE_URL/ANTHROPIC_MODEL）
+cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow/swallow.env
+chmod 600 ~/.config/swallow/swallow.env   # 编辑填 ANTHROPIC_API_KEY=sk-...（走代理再加 ANTHROPIC_BASE_URL/ANTHROPIC_MODEL）
 
 # 3. 跑（产物写在 --cwd 指定的项目目录）
 swallow --cwd /path/to/project "构建一个 Go REST API"
@@ -153,7 +153,7 @@ swallow --cwd /path/to/project "构建一个 Go REST API"
 
 ### 配置（密钥 / 代理 / 模型）
 
-cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥得写进 `~/.config/swallow.env`，orchestrator 启动自动读（已 export 的不覆盖）。
+cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥得写进 `~/.config/swallow/swallow.env`，orchestrator 启动自动读（已 export 的不覆盖）。
 
 | 变量 | 必填 | 含义 |
 |---|---|---|

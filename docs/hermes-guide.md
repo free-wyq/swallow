@@ -36,7 +36,7 @@ flowchart TB
 
 还没装 swallow 的话，把这条发给 Hermes：
 
-> 帮我把 swallow 装好。读 https://raw.githubusercontent.com/free-wyq/swallow/main/install.md 按里面的步骤执行，装好后把我的密钥/代理/模型配进 ~/.config/swallow.env。需要什么密钥你来问我。
+> 帮我把 swallow 装好。读 https://raw.githubusercontent.com/free-wyq/swallow/main/install.md 按里面的步骤执行，装好后把我的密钥/代理/模型配进 ~/.config/swallow/swallow.env。需要什么密钥你来问我。
 
 企业微信群机器人：把这条发给 Hermes「帮我配企业微信群机器人，我要用它收 swallow 战报」——它会问你要群机器人的 webhook URL（企业微信群里建个机器人就有）。
 
@@ -83,7 +83,7 @@ swallow 把结果结构化落盘（`state.json` 恢复点 / `events.jsonl` 审�
 
 ⚠️ [异常标注：空转/阻塞/报错/崩溃才显示，无异常则不显示此行]
 
-要求：swallow 命令已配好 ~/.config/swallow.env，直接跑 swallow --status 即可，别 export 环境变量、别 source ~/.bashrc；启动时间从 night_run.log 第一行的 orchestrator 启动时间提取（swallow 自己写该日志）；心跳从 state.json 的 last_heartbeat_at 读；已完成的任务用「已完成」不用「已修复」；消息里每个字段单独一行、字段间空一行，简洁一目了然。
+要求：swallow 命令已配好 ~/.config/swallow/swallow.env，直接跑 swallow --status 即可，别 export 环境变量、别 source ~/.bashrc；启动时间从 night_run.log 第一行的 orchestrator 启动时间提取（swallow 自己写该日志）；心跳从 state.json 的 last_heartbeat_at 读；已完成的任务用「已完成」不用「已修复」；消息里每个字段单独一行、字段间空一行，简洁一目了然。
 ```
 
 ### 2.2 每日晨报

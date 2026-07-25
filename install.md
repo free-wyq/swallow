@@ -8,16 +8,16 @@
 curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
 ```
 
-装到中立路径（不碰任何 agent 私有目录）：代码 `~/.local/share/swallow`、命令 `~/.local/bin/swallow`、配置 `~/.config/swallow.env`。已有同名文件自动备份成 `.bak`，不静默覆盖。不改 shell rc（PATH 不在 `~/.local/bin` 会提示加一行）。前提：Node 18+（脚本会检查，没有则提示）。
+装到中立路径（不碰任何 agent 私有目录）：代码 `~/.local/share/swallow`、命令 `~/.local/bin/swallow`、配置 `~/.config/swallow/swallow.env`。已有同名文件自动备份成 `.bak`，不静默覆盖。不改 shell rc（PATH 不在 `~/.local/bin` 会提示加一行）。前提：Node 18+（脚本会检查，没有则提示）。
 
 ### 配密钥
 
-把密钥写进 `~/.config/swallow.env`（orchestrator 启动自动读进环境，已 export 的不覆盖）。**别塞 `~/.bashrc`**——cron / systemd / hermes cron 这类非交互调度器跑的是干净 env、不 source `~/.bashrc`，塞进去调度器根本拿不到，还常触发审批。
+把密钥写进 `~/.config/swallow/swallow.env`（orchestrator 启动自动读进环境，已 export 的不覆盖）。**别塞 `~/.bashrc`**——cron / systemd / hermes cron 这类非交互调度器跑的是干净 env、不 source `~/.bashrc`，塞进去调度器根本拿不到，还常触发审批。
 
 ```bash
-cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow.env
-chmod 600 ~/.config/swallow.env   # 密钥别让别的用户读到
-# 编辑 ~/.config/swallow.env，填 ANTHROPIC_API_KEY=sk-...
+cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow/swallow.env
+chmod 600 ~/.config/swallow/swallow.env   # 密钥别让别的用户读到
+# 编辑 ~/.config/swallow/swallow.env，填 ANTHROPIC_API_KEY=sk-...
 #   走代理才加：ANTHROPIC_BASE_URL=http://192.168.241.10:3000
 #   走代理才加：ANTHROPIC_MODEL=glm-5.1（及其它 ANTHROPIC_DEFAULT_*_MODEL）
 ```

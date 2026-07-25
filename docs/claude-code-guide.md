@@ -35,7 +35,7 @@ Claude Code 在 swallow 体系里只干两件事：**任务执行**（拉起 swa
 
 还没装 swallow 的话，把这条发给 Claude Code：
 
-> 帮我把 swallow 装好。读 https://raw.githubusercontent.com/free-wyq/swallow/main/install.md 按里面的步骤执行，装好后把我的密钥/代理/模型配进 ~/.config/swallow.env。需要什么密钥你来问我。
+> 帮我把 swallow 装好。读 https://raw.githubusercontent.com/free-wyq/swallow/main/install.md 按里面的步骤执行，装好后把我的密钥/代理/模型配进 ~/.config/swallow/swallow.env。需要什么密钥你来问我。
 
 下文 `<项目>` 一律是你的项目绝对路径，如 `/home/you/work/myapp`。
 

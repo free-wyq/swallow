@@ -36,10 +36,10 @@ const writeAtomic = (path: string, data: string) => writeFileAtomic.sync(path, d
 // cron / systemd / hermes cron 这类非交互调度器跑的是干净 env，不会 source ~/.bashrc——
 // 用户写在 ~/.bashrc 里的 ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL 它们根本拿不到
 // （实测：调度器里得手 export + sed 抠 ~/.bashrc 才跑得通，极脆、还常触发审批）。
-// 放一份 KEY=VALUE 进 ~/.config/swallow.env，orchestrator 启动时读进 process.env；
+// 放一份 KEY=VALUE 进 ~/.config/swallow/swallow.env，orchestrator 启动时读进 process.env；
 // 已 export 的环境变量优先、不覆盖。SWALLOW_ENV_FILE 可指到别处。
 function loadEnvFileOnce() {
-  const path = process.env.SWALLOW_ENV_FILE || `${homedir()}/.config/swallow.env`;
+  const path = process.env.SWALLOW_ENV_FILE || `${homedir()}/.config/swallow/swallow.env`;
   let text: string;
   try { text = readFileSync(path, "utf8"); } catch { return; }  // 不存在/读不到就跳过
   for (const raw of text.split("\n")) {
@@ -1569,7 +1569,7 @@ function parseArgs(argv: string[]): {
 
 function preflightEnv() {
   const key = process.env.ANTHROPIC_API_KEY;
-  const envFile = process.env.SWALLOW_ENV_FILE || `${homedir()}/.config/swallow.env`;
+  const envFile = process.env.SWALLOW_ENV_FILE || `${homedir()}/.config/swallow/swallow.env`;
   if (key && key.trim() !== "") return;
   if (existsSync(envFile)) return;
   console.error(

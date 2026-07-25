@@ -21,7 +21,7 @@ swallow 自驱推进开发任务、把结果结构化落盘，**不发战报、�
 curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
 ```
 
-装到中立路径：代码 `~/.local/share/swallow`、命令 `~/.local/bin/swallow`、配置 `~/.config/swallow.env`。`orchestrator.ts` 依赖 swallow 仓库的 `node_modules`（含随 SDK 打包的 claude 引擎），不能单独搬走；要换开发项目改 `--cwd`，别改 orchestrator。
+装到中立路径：代码 `~/.local/share/swallow`、命令 `~/.local/bin/swallow`、配置 `~/.config/swallow/swallow.env`。`orchestrator.ts` 依赖 swallow 仓库的 `node_modules`（含随 SDK 打包的 claude 引擎），不能单独搬走；要换开发项目改 `--cwd`，别改 orchestrator。
 
 ## 用法
 
@@ -118,10 +118,10 @@ swallow 升级后重跑上述命令刷新。
 
 ## 密钥 / 代理配置
 
-非交互进程不 source `~/.bashrc`，密钥写进 `~/.config/swallow.env`（swallow 启动自动读，已 export 的不覆盖）：
+非交互进程不 source `~/.bashrc`，密钥写进 `~/.config/swallow/swallow.env`（swallow 启动自动读，已 export 的不覆盖）：
 
 ```bash
-cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow.env && chmod 600 ~/.config/swallow.env
+cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow/swallow.env && chmod 600 ~/.config/swallow/swallow.env
 # 填 ANTHROPIC_API_KEY=sk-...；走代理加 ANTHROPIC_BASE_URL=http://...:3000、ANTHROPIC_MODEL=glm-5.1
 ```
 
