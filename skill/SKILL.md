@@ -15,13 +15,9 @@ swallow 自驱推进开发任务、把结果结构化落盘，**不发战报、�
 
 推进靠 `--watch` 长进程，崩了重启续跑（重启后从 `state.json` 恢复点继续，不丢进度、不重复打勾）。
 
-## 安装
+推进靠 `--watch` 长进程，崩了重启续跑（重启后从 `state.json` 恢复点继续，不丢进度、不重复打勾）。
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
-```
-
-装到中立路径：代码 `~/.local/share/swallow`、命令 `~/.local/bin/swallow`、配置 `~/.config/swallow/swallow.env`。`orchestrator.ts` 依赖 swallow 仓库的 `node_modules`（含随 SDK 打包的 claude 引擎），不能单独搬走；要换开发项目改 `--cwd`，别改 orchestrator。
+> 没装好先看 [install.md](../install.md)（装好 → 注册进你的 skills 目录 → 配密钥）。本文只讲怎么用、怎么看状态、怎么发战报。
 
 ## 用法
 
@@ -101,31 +97,6 @@ swallow --cwd <项目> --resume     # 恢复（删 .stop）
 接入实战（任务执行 + 定时战报 + 微信推送）：
 - [Hermes 实战](../docs/hermes-guide.md)
 - [Claude Code 实战](../docs/claude-code-guide.md)
-
-## 注册成当前 agent 的 skill（可选）
-
-多数 agent 的 skill 扫描器不跟 symlink 进子目录，拷成真目录：
-
-```bash
-# 推理你 agent 的 skills 目录（常见：~/.claude/skills · ~/.codex/skills · ~/.gemini/skills · ~/.cursor/skills · ~/.hermes/skills）
-SKILLS_DIR=~/.claude/skills
-mkdir -p "$SKILLS_DIR"; rm -rf "$SKILLS_DIR/swallow-scheduler"
-cp -r ~/.local/share/swallow/skill "$SKILLS_DIR/swallow-scheduler"
-find "$SKILLS_DIR/swallow-scheduler" -name SKILL.md   # 验证：应返回一行
-```
-
-swallow 升级后重跑上述命令刷新。
-
-## 密钥 / 代理配置
-
-非交互进程不 source `~/.bashrc`，密钥写进 `~/.config/swallow/swallow.env`（swallow 启动自动读，已 export 的不覆盖）：
-
-```bash
-cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow/swallow.env && chmod 600 ~/.config/swallow/swallow.env
-# 填 ANTHROPIC_API_KEY=sk-...；走代理加 ANTHROPIC_BASE_URL=http://...:3000、ANTHROPIC_MODEL=glm-5.1
-```
-
-限额写死在 `orchestrator.ts` 顶部常量（不读 swallow.env），各常量含义见 [docs/observability.md](../docs/observability.md) §3。
 
 ## 已知行为
 
