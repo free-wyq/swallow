@@ -17,7 +17,8 @@
 |---|---|---|---|
 | 事件层 | `events.jsonl`(append-only 审计流,5000 行轮转归档) | 发生了什么(转移/异常) | `appendFileSync` 原子单行(< PIPE_BUF) |
 | 状态层 | `state.json`(恢复点快照,write-file-atomic 原子写) | 当前是什么状态 | tick 出口 + 心跳节流 30s |
-| 查询层 | `--status` / `--status --json` / `--report` | 把上两层组织给人或程序读 | 只读,不落新盘 |
+| 日志层 | `night_run.log`(人类可读逐行操作日志,5000 行轮转归档) | 正在做什么(`log()` 写入) | `appendFileSync` 原子单行 |
+| 查询层 | `--status` / `--status --json` / `--report` | 把上几层组织给人或程序读 | 只读,不落新盘 |
 
 ## 3. 信号目录(按关注维度)
 
@@ -49,9 +50,11 @@
 - `last_termination`:`done`(正常完成)/ `dead_letter_exhausted`(死信兜底停)。防 cron 完成后空转刷屏。
 - `bootstrap_completed` 事件。
 
-### 3.7 events 轮转
-- `EVENTS_ROTATE_LINES(5000)` 滚动归档(rename 原子),`EVENTS_ARCHIVE_KEEP(1)` 保留 1 个归档(`events.jsonl.1`)。
-- 累计计数进 `state.event_counts`(轮转丢明细不丢计数);旧 state 无此字段时 `countEvents` 回退扫文件(向前兼容)。
+### 3.7 events + night_run.log 轮转
+- `EVENTS_ROTATE_LINES(5000)` / `LOG_ROTATE_LINES(5000)` 滚动归档(rename 原子),各保留 1 个归档(`events.jsonl.1` / `night_run.log.1`)。
+- 两者机制同构:`log()` / `appendEvent()` 写入时累计行数,超阈值调 `rotateLog()` / `rotateEvents()` 滚动。防 append-only 长跑涨到几百 MB。
+- events 累计计数进 `state.event_counts`(轮转丢明细不丢计数);旧 state 无此字段时 `countEvents` 回退扫文件(向前兼容)。
+- `--report` 的 night_run.log 异常 grep 读「当前 + .1 归档」拼接,轮转后不丢历史。
 
 ### 3.8 死信队列(lazy 拆)
 - state:`dead_letter`(待拆,暂态)/ `failed_tasks`(拆到底做不了,终态)/ `dlq_split_count`(splitTask 累计,防死循环)。

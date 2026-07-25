@@ -1,5 +1,6 @@
 # 运行产物（写进目标项目目录）
 night_run.log
+night_run.log.[0-9]*
 state.json
 events.jsonl
 events.jsonl.[0-9]*

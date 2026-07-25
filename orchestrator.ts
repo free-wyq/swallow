@@ -97,9 +97,11 @@ const CTX_RECYCLE_RATIO = 0.7;
 const WATCH_SLEEP_MS = 5_000;       // --watch tick 间隔
 const ALREADY_RUNNING_SLEEP_MS = 30_000; // 拿不到锁时的退避
 const LOCK_STALE_MS = 60_000;        // 锁 stale 阈值：proper-lockfile 自动检测并 takeover（进程 kill -9 后 60s 可被抢）
-// 可观测性：events 轮转（防 append-only 长跑涨到几百 MB）+ 心跳节流落盘（runOneTask 期间最长 60min，state.json 否则冻结）。
+// 可观测性：events + night_run.log 都轮转（防 append-only 长跑涨到几百 MB）+ 心跳节流落盘（runOneTask 期间最长 60min，state.json 否则冻结）。
 const EVENTS_ROTATE_LINES = 5000;   // events.jsonl 超 N 行触发轮转（保留近期、归档旧的）。0=不轮转
 const EVENTS_ARCHIVE_KEEP = 1;      // 保留几个归档文件（events.jsonl.1, .2...）
+const LOG_ROTATE_LINES = 5000;      // night_run.log 超 N 行触发轮转（同 events，防 append-only 无限涨）。0=不轮转
+const LOG_ARCHIVE_KEEP = 1;          // 保留几个归档文件（night_run.log.1, .2...）
 const HEARTBEAT_FLUSH_MS = 30_000;  // runOneTask 期间心跳落盘节流间隔（外部 agent 对比 last_heartbeat_at 判 watch 卡死）
 
 // ---------------- 工具函数 ----------------
@@ -124,6 +126,11 @@ function log(msg: string) {
   const line = `[${now()}] ${msg}`;
   console.log(line);
   appendFileSync(LOG_FILE, line + "\n");
+  // 轮转 night_run.log（防 append-only 无限涨）。行数按写入累计，超 LOG_ROTATE_LINES 滚动归档。
+  if (hasLimit(LOG_ROTATE_LINES) && ++logLineCount >= LOG_ROTATE_LINES) {
+    logLineCount = 0;
+    rotateLog();
+  }
 }
 
 // ---- 任务文件读写（.task.md 格式）----
@@ -577,6 +584,30 @@ function rotateEvents() {
     log(`📦 events.jsonl 轮转（保留 ${EVENTS_ARCHIVE_KEEP} 个归档）`);
   } catch (e) {
     log(`⚠️ events 轮转失败（忽略）: ${(e as Error).message}`);
+  }
+}
+
+// night_run.log 轮转：rename 滚动归档（与 events.jsonl 同构，防 append-only 无限涨）。
+// 归档文件名 night_run.log.<n>，.gitignore 用 night_run.log 通配一并忽略。
+let logLineCount = 0;  // 当前 night_run.log 行数缓存（轮转后归零）
+function rotateLog() {
+  try {
+    for (let i = LOG_ARCHIVE_KEEP; i >= 1; i--) {
+      const src = `${LOG_FILE}.${i}`;
+      const dst = `${LOG_FILE}.${i + 1}`;
+      if (i === LOG_ARCHIVE_KEEP) {
+        rmSync(src, { force: true });
+      } else if (existsSync(src)) {
+        renameSync(src, dst);
+      }
+    }
+    if (existsSync(LOG_FILE)) {
+      renameSync(LOG_FILE, `${LOG_FILE}.1`);
+    }
+    writeFileSync(LOG_FILE, "");
+    console.log(`📦 night_run.log 轮转（保留 ${LOG_ARCHIVE_KEEP} 个归档）`);
+  } catch (e) {
+    console.log(`⚠️ night_run.log 轮转失败（忽略）: ${(e as Error).message}`);
   }
 }
 
@@ -1445,9 +1476,10 @@ function showReport() {
   const wr = watchRunning();
   console.log(`\n--watch 进程: ${wr.running ? `运行中 PID=${wr.pid}` : "未运行"}`);
 
-  // night_run.log 兜底 grep（保留历史异常排查能力）
-  if (existsSync(LOG_FILE)) {
-    const logText = readFileSync(LOG_FILE, "utf8");
+  // night_run.log 兜底 grep（保留历史异常排查能力）。读当前文件 + 归档（.1）拼接，轮转后不丢历史。
+  const logPieces = [LOG_FILE, `${LOG_FILE}.1`];
+  const logText = logPieces.filter(existsSync).map((f) => readFileSync(f, "utf8")).join("\n");
+  if (logText) {
     console.log("\n--- night_run.log 异常尾 20 条 ---");
     const errs = logText.split("\n").filter((l) => /错误|失败|❌|异常|假死|空转|阻塞|stale|crash|崩溃/.test(l)).slice(-20);
     console.log(errs.length ? errs.join("\n") : "（未发现）");
