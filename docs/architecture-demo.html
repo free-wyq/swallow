@@ -219,10 +219,10 @@
             <!-- KNOW -->
             <div id="node-KNOW" class="bg-slate-900/90 border border-emerald-500/40 rounded-lg p-2.5 transition-all hover:border-emerald-300 cursor-pointer">
               <div class="flex items-center justify-between text-xs font-mono text-purple-300 font-medium">
-                <span><i class="fa-solid fa-book-bookmark text-purple-400 mr-1"></i> CLAUDE.md</span>
+                <span><i class="fa-solid fa-book-bookmark text-purple-400 mr-1"></i> CLAUDE.md / 记忆</span>
                 <span class="text-[9px] bg-purple-950 text-purple-300 border border-purple-800 px-1 rounded">Knowledge</span>
               </div>
-              <p class="text-[10px] text-slate-400 mt-0.5">.claude/memory 项目基线</p>
+              <p class="text-[10px] text-slate-400 mt-0.5">CLAUDE.md 项目基线 + .claude/memory 跨会话记忆</p>
             </div>
 
             <!-- TASK -->
@@ -473,7 +473,7 @@
         id: 'boot_init',
         activeNodes: ['User', 'BOOT', 'ENV', 'KNOW'],
         activeConns: ['User->BOOT', 'KNOW->BOOT', 'ENV->BOOT'],
-        desc: "<b>[BOOT Stage]</b> 用户或外部 Agent 拉起 <code class='text-amber-300'>--watch</code> 长进程。系统首先读取 <code class='text-amber-300'>swallow.env</code> (密钥与代理) 并调用 <code class='text-purple-300'>loadProjectKnowledge</code> 读取 CLAUDE.md 项目知识基线。",
+        desc: "<b>[BOOT Stage]</b> 用户或外部 Agent 拉起 <code class='text-amber-300'>--watch</code> 长进程。系统首先读取 <code class='text-amber-300'>swallow.env</code> (密钥与代理) 并调用 <code class='text-purple-300'>loadProjectKnowledge</code> 读取 CLAUDE.md 项目基线与 <code class='text-purple-300'>.claude/memory</code> 跨会话记忆。",
         action: () => {
           stateJson.status = "BOOTSTRAPPING";
           addEvent("BOOTSTRAP_START", "Loading environment and project baseline knowledge");
