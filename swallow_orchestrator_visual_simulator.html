@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Swallow Orchestrator 动态架构与运行演练</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              900: '#312e81',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Google Fonts Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+    }
+    code, pre, .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    
+    /* Grid background animation */
+    .bg-tech-grid {
+      background-size: 30px 30px;
+      background-image: 
+        linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+    }
+    
+    /* Connection pulses */
+    @keyframes pulse-flow {
+      0% { stroke-dashoffset: 24; }
+      100% { stroke-dashoffset: 0; }
+    }
+    .flow-line {
+      stroke-dasharray: 6 6;
+      animation: pulse-flow 1s linear infinite;
+    }
+
+    .node-active {
+      box-shadow: 0 0 20px rgba(99, 102, 241, 0.6);
+      transform: scale(1.02);
+    }
+
+    .node-pulse-error {
+      box-shadow: 0 0 25px rgba(239, 68, 68, 0.8);
+    }
+
+    /* Custom scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 h-full flex flex-col overflow-hidden bg-tech-grid select-none">
+
+  <!-- Header Bar -->
+  <header class="bg-slate-900/80 backdrop-blur border-b border-slate-800 px-6 py-3 flex items-center justify-between z-20">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 via-indigo-500 to-emerald-400 p-[2px]">
+        <div class="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
+          <i class="fa-solid font-bold text-amber-400 fa-bolt text-sm"></i>
+        </div>
+      </div>
+      <div>
+        <h1 class="text-base font-bold tracking-wide flex items-center gap-2">
+          Swallow Orchestrator <span class="text-xs font-mono font-normal bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 px-2 py-0.5 rounded-full">v2.4 --watch</span>
+        </h1>
+        <p class="text-xs text-slate-400">长进程任务拆解与自愈演练系统</p>
+      </div>
+    </div>
+
+    <!-- Simulation Controls -->
+    <div class="flex items-center gap-3 bg-slate-950/80 border border-slate-800 rounded-xl p-1.5 px-3 shadow-inner">
+      <button id="btn-play" onclick="togglePlay()" class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition">
+        <i id="icon-play" class="fa-solid fa-play"></i> <span id="label-play">开始运行</span>
+      </button>
+      <button onclick="stepNext()" class="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-2.5 py-1.5 rounded-lg transition border border-slate-700">
+        <i class="fa-solid fa-forward-step"></i> 单步 (Step)
+      </button>
+      <button onclick="resetSim()" class="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 text-xs px-2.5 py-1.5 rounded-lg transition">
+        <i class="fa-solid fa-rotate-right"></i> 重置
+      </button>
+      <div class="h-4 w-px bg-slate-800 mx-1"></div>
+      
+      <!-- Trigger special scenario -->
+      <button id="btn-trigger-overflow" onclick="triggerOverflowScenario()" class="flex items-center gap-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs px-2.5 py-1.5 rounded-lg transition">
+        <i class="fa-solid fa-triangle-exclamation"></i> 模拟上下文爆表 (ctx_overflow)
+      </button>
+
+      <div class="h-4 w-px bg-slate-800 mx-1"></div>
+      
+      <div class="flex items-center gap-2 text-xs text-slate-400">
+        <span>速度:</span>
+        <input type="range" id="speed-slider" min="500" max="3000" step="250" value="1500" class="w-16 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+      </div>
+    </div>
+
+    <!-- Right Quick Info -->
+    <div class="flex items-center gap-4 text-xs text-slate-400">
+      <div class="flex items-center gap-2">
+        <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span class="font-mono text-slate-300">SYSTEM IDLE</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Workspace Grid -->
+  <main class="flex-1 grid grid-cols-12 gap-3 p-3 overflow-hidden">
+    
+    <!-- Left Column: Dynamic Interactive Architecture Diagram (8 Cols) -->
+    <div class="col-span-12 lg:col-span-7 xl:col-span-8 bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-col relative overflow-hidden shadow-2xl">
+      
+      <!-- Flow Diagram SVG Overlay Container -->
+      <div class="absolute inset-0 pointer-events-none z-10" id="svg-container">
+        <svg id="svg-connections" class="w-full h-full">
+          <defs>
+            <!-- Arrow markers -->
+            <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
+            </marker>
+            <marker id="arrow-active" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#818cf8" />
+            </marker>
+            <marker id="arrow-error" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#f87171" />
+            </marker>
+          </defs>
+          <!-- SVG Paths render dynamically in JS -->
+        </svg>
+      </div>
+
+      <!-- Visual Flow Chart Layout Grid -->
+      <div class="relative z-0 h-full grid grid-cols-12 grid-rows-12 gap-3">
+
+        <!-- ⚙️ HOST Subgraph (Top Left) -->
+        <div class="col-span-4 row-span-3 bg-amber-950/20 border border-amber-500/30 rounded-xl p-3 flex flex-col justify-between transition-all" id="box-HOST">
+          <div class="flex items-center justify-between text-amber-400 font-semibold text-xs border-b border-amber-500/20 pb-1.5">
+            <span class="flex items-center gap-1.5"><i class="fa-solid fa-server"></i> HOST 主机配置</span>
+            <span class="font-mono text-[10px] text-amber-500/80">~/.config/</span>
+          </div>
+          <div id="node-ENV" class="bg-slate-900/90 border border-amber-500/40 rounded-lg p-2.5 transition-all hover:border-amber-400 cursor-pointer text-xs">
+            <div class="flex items-center gap-2 font-mono text-amber-300 font-medium">
+              <i class="fa-solid fa-key text-amber-400"></i> swallow.env
+            </div>
+            <p class="text-[10px] text-slate-400 mt-1">API Key / PROXY / MODEL 配置</p>
+          </div>
+        </div>
+
+        <!-- 📡 EXTBOX Subgraph (Top Right) -->
+        <div class="col-span-8 row-span-3 bg-sky-950/20 border border-sky-500/30 rounded-xl p-3 flex flex-col justify-between transition-all" id="box-EXTBOX">
+          <div class="flex items-center justify-between text-sky-400 font-semibold text-xs border-b border-sky-500/20 pb-1.5">
+            <span class="flex items-center gap-1.5"><i class="fa-solid fa-network-wired"></i> EXTBOX 外部 Agent / 用户 (脚本之外)</span>
+            <span class="font-mono text-[10px] text-sky-400/70">CLI / Observer</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2">
+            <div id="node-User" class="bg-slate-900/90 border border-sky-500/40 rounded-lg p-2 text-center transition-all hover:border-sky-300 cursor-pointer">
+              <i class="fa-solid fa-user-astronaut text-sky-400 mb-1"></i>
+              <div class="text-xs font-semibold text-slate-200">User</div>
+              <p class="text-[10px] text-slate-400">拉起 --watch</p>
+            </div>
+            <div id="node-Ext" class="bg-slate-900/90 border border-sky-500/40 rounded-lg p-2 text-center transition-all hover:border-sky-300 cursor-pointer">
+              <i class="fa-solid fa-clock-rotate-left text-sky-400 mb-1"></i>
+              <div class="text-xs font-semibold text-slate-200">Ext</div>
+              <p class="text-[10px] text-slate-400">定时读结果</p>
+            </div>
+            <div id="node-Push" class="bg-slate-900/90 border border-sky-500/40 rounded-lg p-2 text-center transition-all hover:border-sky-300 cursor-pointer">
+              <i class="fa-solid fa-paper-plane text-sky-400 mb-1"></i>
+              <div class="text-xs font-semibold text-slate-200">Push</div>
+              <p class="text-[10px] text-slate-400">自行组织发战报</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 📁 PROJ Subgraph (Left Middle/Bottom) -->
+        <div class="col-span-4 row-span-9 bg-emerald-950/20 border border-emerald-500/30 rounded-xl p-3 flex flex-col justify-between transition-all" id="box-PROJ">
+          <div class="flex items-center justify-between text-emerald-400 font-semibold text-xs border-b border-emerald-500/20 pb-1.5">
+            <span class="flex items-center gap-1.5"><i class="fa-solid fa-folder-open"></i> PROJ 目标项目</span>
+            <span class="font-mono text-[10px] text-emerald-500/80">--cwd</span>
+          </div>
+
+          <div class="space-y-2 my-auto">
+            <!-- KNOW -->
+            <div id="node-KNOW" class="bg-slate-900/90 border border-emerald-500/40 rounded-lg p-2.5 transition-all hover:border-emerald-300 cursor-pointer">
+              <div class="flex items-center justify-between text-xs font-mono text-purple-300 font-medium">
+                <span><i class="fa-solid fa-book-bookmark text-purple-400 mr-1"></i> CLAUDE.md</span>
+                <span class="text-[9px] bg-purple-950 text-purple-300 border border-purple-800 px-1 rounded">Knowledge</span>
+              </div>
+              <p class="text-[10px] text-slate-400 mt-0.5">.claude/memory 项目基线</p>
+            </div>
+
+            <!-- TASK -->
+            <div id="node-TASK" class="bg-slate-900/90 border border-emerald-500/40 rounded-lg p-2.5 transition-all hover:border-emerald-300 cursor-pointer">
+              <div class="flex items-center justify-between text-xs font-mono text-emerald-300 font-medium">
+                <span><i class="fa-solid fa-list-check text-emerald-400 mr-1"></i> .task.md</span>
+                <span class="text-[9px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-1 rounded">Truth</span>
+              </div>
+              <p class="text-[10px] text-slate-400 mt-0.5">进度真相源 (Markdown)</p>
+            </div>
+
+            <!-- STATE -->
+            <div id="node-STATE" class="bg-slate-900/90 border border-emerald-500/40 rounded-lg p-2.5 transition-all hover:border-emerald-300 cursor-pointer">
+              <div class="flex items-center justify-between text-xs font-mono text-emerald-300 font-medium">
+                <span><i class="fa-solid fa-floppy-disk text-emerald-400 mr-1"></i> state.json</span>
+                <span class="text-[9px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-1 rounded">Checkpoint</span>
+              </div>
+              <p class="text-[10px] text-slate-400 mt-0.5">恢复点 (原子写入)</p>
+            </div>
+
+            <!-- EVENTS -->
+            <div id="node-EVENTS" class="bg-slate-900/90 border border-emerald-500/40 rounded-lg p-2.5 transition-all hover:border-emerald-300 cursor-pointer">
+              <div class="flex items-center justify-between text-xs font-mono text-sky-300 font-medium">
+                <span><i class="fa-solid fa-timeline text-sky-400 mr-1"></i> events.jsonl</span>
+                <span class="text-[9px] bg-sky-950 text-sky-300 border border-sky-800 px-1 rounded">Audit</span>
+              </div>
+              <p class="text-[10px] text-slate-400 mt-0.5">Append-only 审计日志</p>
+            </div>
+          </div>
+
+          <div class="text-[10px] text-emerald-500/60 font-mono text-center border-t border-emerald-500/10 pt-1">
+            Git Repository Artifacts
+          </div>
+        </div>
+
+        <!-- 🛠️ SCRIPT Subgraph (Right Middle/Bottom - Core Engine) -->
+        <div class="col-span-8 row-span-9 bg-orange-950/20 border border-orange-500/30 rounded-xl p-3 flex flex-col justify-between transition-all" id="box-SCRIPT">
+          <div class="flex items-center justify-between text-orange-400 font-semibold text-xs border-b border-orange-500/20 pb-1.5">
+            <span class="flex items-center gap-1.5"><i class="fa-solid fa-gears"></i> SCRIPT swallow orchestrator (脚本长进程)</span>
+            <span class="font-mono text-[10px] bg-orange-500/20 text-orange-300 border border-orange-500/30 px-2 py-0.5 rounded">--watch</span>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3 my-auto">
+            
+            <!-- Left Orchestration Logic Flow -->
+            <div class="space-y-2">
+              <div id="node-BOOT" class="bg-slate-900/90 border border-orange-500/40 rounded-lg p-2 transition-all cursor-pointer">
+                <div class="text-xs font-semibold text-orange-300 flex items-center justify-between">
+                  <span><i class="fa-solid fa-power-off text-orange-400 mr-1"></i> BOOT</span>
+                  <span class="font-mono text-[9px] text-slate-400">bootstrap 拆任务</span>
+                </div>
+              </div>
+
+              <div id="node-TICK" class="bg-slate-900/90 border border-amber-500/50 rounded-lg p-2 transition-all cursor-pointer">
+                <div class="text-xs font-semibold text-amber-300 flex items-center justify-between">
+                  <span><i class="fa-solid fa-rotate text-amber-400 mr-1"></i> TICK</span>
+                  <span class="font-mono text-[9px] text-amber-400/80">while 循环幂等</span>
+                </div>
+              </div>
+
+              <div id="node-RUN" class="bg-slate-900/90 border border-orange-500/40 rounded-lg p-2 transition-all cursor-pointer">
+                <div class="text-xs font-semibold text-orange-300 flex items-center justify-between">
+                  <span><i class="fa-solid fa-play text-emerald-400 mr-1"></i> RUN</span>
+                  <span class="font-mono text-[9px] text-slate-400">runOneTask</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Engine & Error Recovery -->
+            <div class="space-y-2">
+              <!-- SDK & CLI Box -->
+              <div class="bg-slate-950/80 border border-emerald-500/30 rounded-lg p-2 space-y-1">
+                <div id="node-SDK" class="bg-slate-900/90 border border-emerald-500/40 rounded p-1.5 transition-all cursor-pointer">
+                  <div class="text-[11px] font-mono text-emerald-300 flex items-center justify-between">
+                    <span><i class="fa-solid fa-cube text-emerald-400 mr-1"></i> SDK</span>
+                    <span class="text-[9px] text-slate-400">claude-agent-sdk</span>
+                  </div>
+                </div>
+
+                <div id="node-CLI" class="bg-slate-900/90 border border-amber-500/40 rounded p-1.5 transition-all cursor-pointer">
+                  <div class="text-[11px] font-mono text-amber-300 flex items-center justify-between">
+                    <span><i class="fa-solid fa-terminal text-amber-400 mr-1"></i> CLI</span>
+                    <span class="text-[9px] text-slate-400">claude engine</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- DLQ & SPLIT Error Recovery Block -->
+              <div class="bg-red-950/20 border border-red-500/30 rounded-lg p-2 space-y-1.5">
+                <div id="node-DLQ" class="bg-slate-900/90 border border-red-500/50 rounded p-1.5 transition-all cursor-pointer">
+                  <div class="text-[11px] font-mono text-red-300 flex items-center justify-between">
+                    <span><i class="fa-solid fa-box-archive text-red-400 mr-1"></i> DLQ</span>
+                    <span class="text-[9px] text-red-400/80">state.dead_letter</span>
+                  </div>
+                </div>
+
+                <div id="node-SPLIT" class="bg-slate-900/90 border border-amber-500/40 rounded p-1.5 transition-all cursor-pointer">
+                  <div class="text-[11px] font-mono text-amber-300 flex items-center justify-between">
+                    <span><i class="fa-solid fa-scissors text-amber-400 mr-1"></i> SPLIT</span>
+                    <span class="text-[9px] text-slate-400">splitTask 拆子项</span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+
+          <div class="flex items-center justify-between text-[10px] text-slate-400 border-t border-orange-500/20 pt-1.5 px-1 font-mono">
+            <span>Status: <span id="orchestrator-status" class="text-amber-400">IDLE</span></span>
+            <span>Active Goal: <span id="current-goal-id" class="text-indigo-300">#goal-01</span></span>
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- Right Column: Real-time Runtime Inspector (4 Cols) -->
+    <div class="col-span-12 lg:col-span-5 xl:col-span-4 flex flex-col gap-3 overflow-hidden">
+      
+      <!-- Top Inspector Tab Nav -->
+      <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-1 flex gap-1">
+        <button onclick="switchTab('task')" id="tab-btn-task" class="flex-1 py-1.5 text-xs font-medium rounded-lg text-white bg-indigo-600 transition">
+          <i class="fa-solid fa-list-check mr-1"></i> .task.md
+        </button>
+        <button onclick="switchTab('state')" id="tab-btn-state" class="flex-1 py-1.5 text-xs font-medium rounded-lg text-slate-400 hover:text-slate-200 transition">
+          <i class="fa-solid fa-code mr-1"></i> state.json
+        </button>
+        <button onclick="switchTab('events')" id="tab-btn-events" class="flex-1 py-1.5 text-xs font-medium rounded-lg text-slate-400 hover:text-slate-200 transition">
+          <i class="fa-solid fa-terminal mr-1"></i> events.jsonl
+        </button>
+      </div>
+
+      <!-- Live Code/File Viewer Panel -->
+      <div class="flex-1 bg-slate-950 border border-slate-800 rounded-2xl p-3 flex flex-col font-mono text-xs overflow-hidden relative shadow-inner">
+        
+        <!-- TASK VIEW -->
+        <div id="view-task" class="h-full flex flex-col">
+          <div class="flex items-center justify-between pb-2 border-b border-slate-800 text-slate-400 text-[11px]">
+            <span class="text-emerald-400 flex items-center gap-1.5"><i class="fa-regular fa-file-code"></i> .task.md (真相源)</span>
+            <span class="text-[10px] text-slate-400">实时任务表</span>
+          </div>
+          <div class="flex-1 overflow-y-auto py-2 space-y-1.5 text-slate-300" id="task-md-content">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
+
+        <!-- STATE VIEW -->
+        <div id="view-state" class="h-full flex-col hidden">
+          <div class="flex items-center justify-between pb-2 border-b border-slate-800 text-slate-400 text-[11px]">
+            <span class="text-amber-400 flex items-center gap-1.5"><i class="fa-solid fa-database"></i> state.json (恢复点)</span>
+            <span id="state-atomic-badge" class="text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 rounded">Atomic Write OK</span>
+          </div>
+          <pre class="flex-1 overflow-y-auto py-2 text-[11px] text-amber-200/90 leading-relaxed" id="state-json-content"></pre>
+        </div>
+
+        <!-- EVENTS VIEW -->
+        <div id="view-events" class="h-full flex-col hidden">
+          <div class="flex items-center justify-between pb-2 border-b border-slate-800 text-slate-400 text-[11px]">
+            <span class="text-sky-400 flex items-center gap-1.5"><i class="fa-solid fa-bars-staggered"></i> events.jsonl (审计日志)</span>
+            <span class="text-[9px] bg-sky-500/20 text-sky-400 border border-sky-500/30 px-1.5 rounded">Append-Only</span>
+          </div>
+          <div class="flex-1 overflow-y-auto py-2 space-y-1 text-[11px] text-sky-200/80 leading-snug" id="events-log-content">
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Dynamic Step Explanation Panel -->
+      <div class="bg-slate-900/90 border border-indigo-500/30 rounded-2xl p-3.5 shadow-lg">
+        <div class="flex items-center justify-between text-indigo-400 font-semibold text-xs mb-1.5">
+          <span class="flex items-center gap-1.5"><i class="fa-solid fa-circle-info"></i> 执行状态解说</span>
+          <span id="step-counter" class="text-[10px] font-mono text-slate-400">STEP 0/0</span>
+        </div>
+        <p id="step-description" class="text-xs text-slate-300 leading-relaxed min-h-[3.5rem]">
+          点击 “开始运行” 或 “单步 (Step)” 触发 Swallow Orchestrator 的任务拆解与循环执行。
+        </p>
+      </div>
+
+    </div>
+
+  </main>
+
+  <script>
+    // System Simulation State
+    let isPlaying = false;
+    let currentStepIndex = 0;
+    let timer = null;
+    let speed = 1500;
+    let triggerOverflow = false;
+
+    // Data Structures
+    let taskMarkdown = [
+      { id: 'task-1', title: '读取 CLAUDE.md 分析架构基线', status: 'pending', retry: 0 },
+      { id: 'task-2', title: '执行复杂算法模块重构 (大上下文)', status: 'pending', retry: 0 },
+      { id: 'task-3', title: '运行单元测试并生成 commit', status: 'pending', retry: 0 }
+    ];
+
+    let stateJson = {
+      version: 1,
+      goal: "Refactor core module and update architecture",
+      status: "IDLE",
+      current_task_id: null,
+      completed_tasks: [],
+      dead_letter: []
+    };
+
+    let eventsLog = [
+      `{"time":"${new Date().toISOString()}","event":"INIT","msg":"Swallow Orchestrator initialized"}`
+    ];
+
+    // Connection SVG coordinates mapped by node pair
+    const connectionPairs = [
+      { from: 'User', to: 'BOOT', label: '拉起' },
+      { from: 'KNOW', to: 'BOOT', label: 'loadProjectKnowledge' },
+      { from: 'ENV', to: 'BOOT', label: '密钥/代理' },
+      { from: 'BOOT', to: 'TASK', label: '写出 .task.md' },
+      { from: 'BOOT', to: 'TICK', label: '进入循环' },
+      { from: 'TICK', to: 'RUN', label: '读首个未完成' },
+      { from: 'ENV', to: 'RUN', label: '密钥/模型' },
+      { from: 'RUN', to: 'SDK', label: 'SDK 调用' },
+      { from: 'SDK', to: 'CLI', label: 'spawn 子进程' },
+      { from: 'CLI', to: 'RUN', label: 'PostToolUse 回调' },
+      { from: 'TICK', to: 'STATE', label: '原子写状态' },
+      { from: 'TICK', to: 'EVENTS', label: 'Append 日志' },
+      { from: 'TICK', to: 'TASK', label: '打勾 [x]' },
+      { from: 'RUN', to: 'DLQ', label: 'ctx_overflow 达限', type: 'error' },
+      { from: 'DLQ', to: 'SPLIT', label: '触发拆分' },
+      { from: 'SPLIT', to: 'TICK', label: '子 task 插回' },
+      { from: 'Ext', to: 'STATE', label: '读已落盘结果' },
+      { from: 'Ext', to: 'Push', label: '发战报' }
+    ];
+
+    // Execution sequence steps for the visual workflow simulation
+    const scenarioSteps = [
+      {
+        id: 'boot_init',
+        activeNodes: ['User', 'BOOT', 'ENV', 'KNOW'],
+        activeConns: ['User->BOOT', 'KNOW->BOOT', 'ENV->BOOT'],
+        desc: "<b>[BOOT Stage]</b> 用户拉起 <code class='text-amber-300'>--watch</code> 长进程。系统首先读取 <code class='text-amber-300'>swallow.env</code> (密钥与代理) 并调用 <code class='text-purple-300'>loadProjectKnowledge</code> 读取 CLAUDE.md 项目知识基线。",
+        action: () => {
+          stateJson.status = "BOOTSTRAPPING";
+          addEvent("BOOTSTRAP_START", "Loading environment and project baseline knowledge");
+        }
+      },
+      {
+        id: 'boot_write_task',
+        activeNodes: ['BOOT', 'TASK'],
+        activeConns: ['BOOT->TASK', 'BOOT->TICK'],
+        desc: "<b>[BOOT -> TASK]</b> BOOT 阶段分析 Goal 目标，拆解出初始任务列表，并首次写出 <code class='text-emerald-300'>.task.md</code> 作为进度真相源。随后交由 <code class='text-amber-300 font-bold'>TICK</code> 主循环。",
+        action: () => {
+          stateJson.status = "RUNNING";
+          addEvent("TASK_DISPATCH", "Initial .task.md created with 3 core tasks");
+        }
+      },
+      {
+        id: 'tick_start_task1',
+        activeNodes: ['TICK', 'RUN', 'TASK'],
+        activeConns: ['TICK->RUN'],
+        desc: "<b>[TICK Step 1]</b> <code class='text-amber-300'>TICK</code> 进入幂等单步循环，读取 <code class='text-emerald-300'>.task.md</code> 中首个未完成的任务 [<code class='text-indigo-300'>task-1</code>] 并标注状态为进行中 <code class='text-amber-400'>[~]</code>。",
+        action: () => {
+          taskMarkdown[0].status = 'in_progress';
+          stateJson.current_task_id = 'task-1';
+          addEvent("TICK_READ", "Found uncompleted task-1: 读取 CLAUDE.md 分析架构");
+        }
+      },
+      {
+        id: 'run_task1_sdk',
+        activeNodes: ['RUN', 'SDK', 'CLI', 'ENV'],
+        activeConns: ['ENV->RUN', 'RUN->SDK', 'SDK->CLI', 'CLI->RUN'],
+        desc: "<b>[RUN & Execution]</b> <code class='text-emerald-400'>runOneTask</code> 注入 swallow.env 配置，通过 <code class='text-emerald-300'>claude-agent-sdk</code> 孵化 CLI 子进程。处理过程中工具调用通过 <code class='text-indigo-300'>PostToolUse</code> 回调返回给 RUN 监听。",
+        action: () => {
+          addEvent("CLI_EXEC", "Task-1 executed via claude-agent-sdk. Tools called successfully.");
+        }
+      },
+      {
+        id: 'tick_commit_task1',
+        activeNodes: ['TICK', 'STATE', 'EVENTS', 'TASK'],
+        activeConns: ['TICK->STATE', 'TICK->EVENTS', 'TICK->TASK'],
+        desc: "<b>[State Save & Commit]</b> <code class='text-indigo-300'>task-1</code> 执行完成！TICK 触发三连写：1. <code class='text-emerald-300'>.task.md</code> 打勾 <code class='text-emerald-400'>[x]</code> 2. 原子写入 <code class='text-amber-300'>state.json</code> 3. Append 追加日志至 <code class='text-sky-300'>events.jsonl</code>。",
+        action: () => {
+          taskMarkdown[0].status = 'completed';
+          stateJson.completed_tasks.push('task-1');
+          stateJson.current_task_id = null;
+          addEvent("TASK_COMPLETE", "Task-1 finished. Atomic state checkpoint saved.");
+        }
+      },
+      {
+        id: 'tick_start_task2',
+        activeNodes: ['TICK', 'RUN', 'TASK'],
+        activeConns: ['TICK->RUN'],
+        desc: "<b>[TICK Step 2]</b> 循环进入下一轮。TICK 扫描到 [<code class='text-indigo-300'>task-2</code>: 复杂算法模块重构]，将其锁定为当前任务 <code class='text-amber-400'>[~]</code>。",
+        action: () => {
+          taskMarkdown[1].status = 'in_progress';
+          stateJson.current_task_id = 'task-2';
+          addEvent("TICK_READ", "Found task-2: 执行复杂算法模块重构");
+        }
+      },
+      // Conditional branching step based on whether overflow scenario was triggered
+      {
+        id: 'run_task2_overflow_check',
+        getDynamicStep: () => {
+          if (triggerOverflow) {
+            return {
+              activeNodes: ['RUN', 'DLQ', 'SPLIT'],
+              activeConns: ['RUN->DLQ', 'DLQ->SPLIT'],
+              desc: "<b>[⚠️ ctx_overflow 异常捕获]</b> <code class='text-red-400 font-bold'>上下文超限 (ctx_overflow)!</code> 单个 Prompt 载荷爆发。<code class='text-emerald-400'>runOneTask</code> 终止并压入 <code class='text-red-400'>state.dead_letter</code> 死信队列。死信队列触发 <code class='text-amber-300'>splitTask</code> 惰性拆分！",
+              action: () => {
+                taskMarkdown[1].status = 'failed';
+                stateJson.dead_letter.push({ task_id: 'task-2', reason: 'ctx_overflow', timestamp: new Date().toISOString() });
+                addEvent("CTX_OVERFLOW", "Task-2 exceeded context limit. Pushed to dead_letter queue.");
+              }
+            };
+          } else {
+            return {
+              activeNodes: ['RUN', 'SDK', 'CLI'],
+              activeConns: ['RUN->SDK', 'SDK->CLI', 'CLI->RUN'],
+              desc: "<b>[RUN Normal Execution]</b> task-2 执行顺利，未超出上下文限额，CLI 子进程正常输出结果。",
+              action: () => {
+                addEvent("CLI_EXEC", "Task-2 executed smoothly without context overflow.");
+              }
+            };
+          }
+        }
+      },
+      {
+        id: 'split_and_reinsert',
+        getDynamicStep: () => {
+          if (triggerOverflow) {
+            return {
+              activeNodes: ['SPLIT', 'TICK', 'TASK', 'STATE'],
+              activeConns: ['SPLIT->TICK', 'TICK->TASK', 'TICK->STATE'],
+              desc: "<b>[SPLIT 拆解插回]</b> <code class='text-amber-300'>splitTask</code> 将爆表的 task-2 拆解为 2 个更小的子任务 [<code class='text-indigo-300'>task-2a</code>] 与 [<code class='text-indigo-300'>task-2b</code>]，并插回 <code class='text-emerald-300'>.task.md</code> 顶部，供 TICK 无缝重启继续迭代！",
+              action: () => {
+                // Replace failed task-2 with subtasks
+                taskMarkdown.splice(1, 1, 
+                  { id: 'task-2a', title: '拆分 2a: 模块接口抽象与解耦', status: 'pending', retry: 0 },
+                  { id: 'task-2b', title: '拆分 2b: 算法子功能实现', status: 'pending', retry: 0 }
+                );
+                triggerOverflow = false; // reset flag
+                document.getElementById('btn-trigger-overflow').classList.remove('bg-amber-500/40', 'border-amber-400');
+                addEvent("TASK_SPLIT", "Task-2 split into task-2a and task-2b. Re-inserted into task flow.");
+              }
+            };
+          } else {
+            return {
+              activeNodes: ['TICK', 'STATE', 'TASK', 'EVENTS'],
+              activeConns: ['TICK->STATE', 'TICK->TASK', 'TICK->EVENTS'],
+              desc: "<b>[Task-2 Normal Finish]</b> task-2 完成。TICK 写入 state.json 并更新 .task.md 打勾。",
+              action: () => {
+                taskMarkdown[1].status = 'completed';
+                stateJson.completed_tasks.push('task-2');
+                stateJson.current_task_id = null;
+                addEvent("TASK_COMPLETE", "Task-2 finished successfully.");
+              }
+            };
+          }
+        }
+      },
+      {
+        id: 'ext_monitoring',
+        activeNodes: ['Ext', 'STATE', 'Push'],
+        activeConns: ['Ext->STATE', 'Ext->Push'],
+        desc: "<b>[EXTBOX 外部联动]</b> 外部观察 Agent (<code class='text-sky-300'>Ext</code>) 轮询读取磁盘落盘的 <code class='text-emerald-300'>state.json</code>，检测到最新进度后，自主组织并推送战报到 Slack/钉钉 (<code class='text-sky-300'>Push</code>)。",
+        action: () => {
+          addEvent("EXT_POLL", "External observer pulled state.json and pushed status summary");
+        }
+      },
+      {
+        id: 'tick_finish_all',
+        activeNodes: ['TICK', 'TASK', 'STATE'],
+        activeConns: ['TICK->TASK'],
+        desc: "<b>[All Complete]</b> TICK 扫描 .task.md，确认所有任务均已完成 <code class='text-emerald-400'>[x]</code>。Orchestrator 进程回到 IDLE 状态，等待下一次用户 Trigger 或 Watch 增量变更。",
+        action: () => {
+          // Mark remaining as completed
+          taskMarkdown.forEach(t => t.status = 'completed');
+          stateJson.status = "COMPLETED";
+          stateJson.current_task_id = null;
+          addEvent("ALL_DONE", "All tasks in .task.md completed successfully.");
+        }
+      }
+    ];
+
+    // Initialize & UI Render Functions
+    window.onload = () => {
+      renderAllViews();
+      drawConnections();
+      window.addEventListener('resize', drawConnections);
+    };
+
+    function renderAllViews() {
+      renderTaskMd();
+      renderStateJson();
+      renderEventsLog();
+    }
+
+    function renderTaskMd() {
+      const container = document.getElementById('task-md-content');
+      let html = `<div class="text-slate-500 mb-2 font-mono text-[10px]"># TASK PROGRESS (.task.md)</div>`;
+      
+      taskMarkdown.forEach(t => {
+        let mark = '[ ]';
+        let colorClass = 'text-slate-400';
+        let bgClass = 'bg-slate-900/40 border-slate-800';
+
+        if (t.status === 'completed') {
+          mark = '[x]';
+          colorClass = 'text-emerald-400 line-through';
+          bgClass = 'bg-emerald-950/20 border-emerald-500/30';
+        } else if (t.status === 'in_progress') {
+          mark = '[~]';
+          colorClass = 'text-amber-300 font-semibold';
+          bgClass = 'bg-amber-950/30 border-amber-500/40 animate-pulse';
+        } else if (t.status === 'failed') {
+          mark = '[!]';
+          colorClass = 'text-red-400 font-semibold';
+          bgClass = 'bg-red-950/30 border-red-500/40';
+        }
+
+        html += `
+          <div class="p-2 rounded border ${bgClass} flex items-center justify-between text-xs font-mono transition-all">
+            <span class="${colorClass}">${mark} ${t.title}</span>
+            <span class="text-[9px] px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 text-slate-400">${t.id}</span>
+          </div>
+        `;
+      });
+
+      container.innerHTML = html;
+    }
+
+    function renderStateJson() {
+      const container = document.getElementById('state-json-content');
+      container.textContent = JSON.stringify(stateJson, null, 2);
+    }
+
+    function renderEventsLog() {
+      const container = document.getElementById('events-log-content');
+      container.innerHTML = eventsLog.map(line => {
+        return `<div class="font-mono text-[10px] bg-slate-900/60 p-1 rounded border border-slate-800/80 hover:border-slate-700 transition">
+          <span class="text-sky-400 font-bold">></span> ${escapeHtml(line)}
+        </div>`;
+      }).reverse().join('');
+    }
+
+    function addEvent(evt, msg) {
+      const entry = JSON.stringify({
+        time: new Date().toLocaleTimeString(),
+        event: evt,
+        msg: msg
+      });
+      eventsLog.push(entry);
+      renderEventsLog();
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    // SVG Connection Lines Generator
+    function drawConnections() {
+      const svg = document.getElementById('svg-connections');
+      const containerRect = document.getElementById('svg-container').getBoundingClientRect();
+      
+      // Clear existing paths
+      const existingPaths = svg.querySelectorAll('path');
+      existingPaths.forEach(p => p.remove());
+
+      connectionPairs.forEach(pair => {
+        const fromNode = document.getElementById(`node-${pair.from}`);
+        const toNode = document.getElementById(`node-${pair.to}`);
+
+        if (!fromNode || !toNode) return;
+
+        const rectA = fromNode.getBoundingClientRect();
+        const rectB = toNode.getBoundingClientRect();
+
+        // Calculate start and end coordinates relative to SVG canvas
+        const startX = rectA.left + rectA.width / 2 - containerRect.left;
+        const startY = rectA.top + rectA.height / 2 - containerRect.top;
+        const endX = rectB.left + rectB.width / 2 - containerRect.left;
+        const endY = rectB.top + rectB.height / 2 - containerRect.top;
+
+        // Curve control point
+        const deltaX = (endX - startX) * 0.4;
+        const deltaY = (endY - startY) * 0.4;
+        
+        const pathD = `M ${startX} ${startY} C ${startX + deltaX} ${startY}, ${endX - deltaX} ${endY}, ${endX} ${endY}`;
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', pathD);
+        path.setAttribute('id', `conn-${pair.from}->${pair.to}`);
+        path.setAttribute('stroke', pair.type === 'error' ? '#f87171' : '#334155');
+        path.setAttribute('stroke-width', '1.5');
+        path.setAttribute('fill', 'none');
+        path.setAttribute('marker-end', pair.type === 'error' ? 'url(#arrow-error)' : 'url(#arrow)');
+        path.setAttribute('class', 'transition-all duration-500');
+
+        svg.appendChild(path);
+      });
+    }
+
+    // Simulation Engine Functions
+    function togglePlay() {
+      isPlaying = !isPlaying;
+      const btnLabel = document.getElementById('label-play');
+      const btnIcon = document.getElementById('icon-play');
+
+      if (isPlaying) {
+        btnLabel.textContent = "暂停";
+        btnIcon.className = "fa-solid fa-pause";
+        runLoop();
+      } else {
+        btnLabel.textContent = "继续运行";
+        btnIcon.className = "fa-solid fa-play";
+        clearTimeout(timer);
+      }
+    }
+
+    function runLoop() {
+      if (!isPlaying) return;
+      stepNext();
+      if (currentStepIndex < scenarioSteps.length) {
+        speed = parseInt(document.getElementById('speed-slider').value);
+        timer = setTimeout(runLoop, speed);
+      } else {
+        isPlaying = false;
+        document.getElementById('label-play').textContent = "重新开始";
+        document.getElementById('icon-play').className = "fa-solid fa-rotate-right";
+      }
+    }
+
+    function stepNext() {
+      if (currentStepIndex >= scenarioSteps.length) {
+        currentStepIndex = 0; // wrap around or reset
+      }
+
+      let step = scenarioSteps[currentStepIndex];
+      
+      // Handle dynamic steps (like conditional branching on overflow)
+      if (step.getDynamicStep) {
+        step = step.getDynamicStep();
+      }
+
+      // 1. Clear previous visual highlights
+      document.querySelectorAll('[id^="node-"]').forEach(n => {
+        n.classList.remove('node-active', 'border-indigo-400', 'bg-indigo-950/60', 'node-pulse-error');
+      });
+      document.querySelectorAll('#svg-connections path').forEach(p => {
+        p.setAttribute('stroke', '#334155');
+        p.setAttribute('stroke-width', '1.5');
+        p.classList.remove('flow-line');
+      });
+
+      // 2. Apply new highlights
+      step.activeNodes.forEach(nodeId => {
+        const node = document.getElementById(`node-${nodeId}`);
+        if (node) {
+          node.classList.add('node-active', 'border-indigo-400');
+          if (nodeId === 'DLQ') node.classList.add('node-pulse-error');
+        }
+      });
+
+      step.activeConns.forEach(connKey => {
+        const connPath = document.getElementById(`conn-${connKey}`);
+        if (connPath) {
+          const isErr = connKey.includes('DLQ') || connKey.includes('overflow');
+          connPath.setAttribute('stroke', isErr ? '#ef4444' : '#818cf8');
+          connPath.setAttribute('stroke-width', '3');
+          connPath.classList.add('flow-line');
+        }
+      });
+
+      // 3. Execute step action (updates JSON, Markdown, Events)
+      if (step.action) step.action();
+
+      // 4. Update status explanation text
+      document.getElementById('step-description').innerHTML = step.desc;
+      document.getElementById('step-counter').textContent = `STEP ${currentStepIndex + 1}/${scenarioSteps.length}`;
+      document.getElementById('orchestrator-status').textContent = stateJson.status;
+
+      // 5. Re-render UI views
+      renderAllViews();
+
+      currentStepIndex++;
+    }
+
+    function triggerOverflowScenario() {
+      triggerOverflow = true;
+      const btn = document.getElementById('btn-trigger-overflow');
+      btn.classList.add('bg-amber-500/40', 'border-amber-400');
+      
+      // If idle, alert user
+      addEvent("USER_INJECT", "Trigger set: Next task execution will force ctx_overflow scenario.");
+    }
+
+    function resetSim() {
+      isPlaying = false;
+      clearTimeout(timer);
+      currentStepIndex = 0;
+      triggerOverflow = false;
+
+      document.getElementById('label-play').textContent = "开始运行";
+      document.getElementById('icon-play').className = "fa-solid fa-play";
+      document.getElementById('btn-trigger-overflow').classList.remove('bg-amber-500/40', 'border-amber-400');
+
+      taskMarkdown = [
+        { id: 'task-1', title: '读取 CLAUDE.md 分析架构基线', status: 'pending', retry: 0 },
+        { id: 'task-2', title: '执行复杂算法模块重构 (大上下文)', status: 'pending', retry: 0 },
+        { id: 'task-3', title: '运行单元测试并生成 commit', status: 'pending', retry: 0 }
+      ];
+
+      stateJson = {
+        version: 1,
+        goal: "Refactor core module and update architecture",
+        status: "IDLE",
+        current_task_id: null,
+        completed_tasks: [],
+        dead_letter: []
+      };
+
+      eventsLog = [
+        `{"time":"${new Date().toISOString()}","event":"RESET","msg":"Simulator reset to initial state"}`
+      ];
+
+      document.querySelectorAll('[id^="node-"]').forEach(n => {
+        n.classList.remove('node-active', 'border-indigo-400', 'node-pulse-error');
+      });
+      document.querySelectorAll('#svg-connections path').forEach(p => {
+        p.setAttribute('stroke', '#334155');
+        p.setAttribute('stroke-width', '1.5');
+        p.classList.remove('flow-line');
+      });
+
+      document.getElementById('step-description').innerHTML = "已重置。点击 “开始运行” 或 “单步 (Step)” 启动 Swallow Orchestrator 演练。";
+      document.getElementById('step-counter').textContent = "STEP 0/0";
+      document.getElementById('orchestrator-status').textContent = "IDLE";
+
+      renderAllViews();
+    }
+
+    // Tab Switching Logic
+    function switchTab(tabName) {
+      ['task', 'state', 'events'].forEach(t => {
+        const view = document.getElementById(`view-${t}`);
+        const btn = document.getElementById(`tab-btn-${t}`);
+        if (t === tabName) {
+          view.classList.remove('hidden');
+          view.classList.add('flex');
+          btn.classList.add('bg-indigo-600', 'text-white');
+          btn.classList.remove('text-slate-400');
+        } else {
+          view.classList.add('hidden');
+          view.classList.remove('flex');
+          btn.classList.remove('bg-indigo-600', 'text-white');
+          btn.classList.add('text-slate-400');
+        }
+      });
+    }
+  </script>
+</body>
+</html>
