@@ -184,12 +184,15 @@
         <div class="col-span-8 row-span-3 bg-sky-950/20 border border-sky-500/30 rounded-xl p-3 flex flex-col justify-between transition-all" id="box-EXTBOX">
           <div class="flex items-center justify-between text-sky-400 font-semibold text-xs border-b border-sky-500/20 pb-1.5">
             <span class="flex items-center gap-1.5"><i class="fa-solid fa-network-wired"></i> EXTBOX 外部 Agent / 用户 (脚本之外)</span>
-            <span class="font-mono text-[10px] text-sky-400/70">CLI / Observer</span>
+            <span class="font-mono text-[10px] text-sky-400/70">Observer / Trigger</span>
           </div>
           <div class="grid grid-cols-3 gap-2">
             <div id="node-User" class="bg-slate-900/90 border border-sky-500/40 rounded-lg p-2 text-center transition-all hover:border-sky-300 cursor-pointer">
-              <i class="fa-solid fa-user-astronaut text-sky-400 mb-1"></i>
-              <div class="text-xs font-semibold text-slate-200">User</div>
+              <div class="flex items-center justify-center gap-1 mb-1">
+                <i class="fa-solid fa-user-astronaut text-sky-400"></i>
+                <i class="fa-solid fa-robot text-sky-300 text-[10px]"></i>
+              </div>
+              <div class="text-xs font-semibold text-slate-200">User / Agent</div>
               <p class="text-[10px] text-slate-400">拉起 --watch</p>
             </div>
             <div id="node-Ext" class="bg-slate-900/90 border border-sky-500/40 rounded-lg p-2 text-center transition-all hover:border-sky-300 cursor-pointer">
@@ -470,7 +473,7 @@
         id: 'boot_init',
         activeNodes: ['User', 'BOOT', 'ENV', 'KNOW'],
         activeConns: ['User->BOOT', 'KNOW->BOOT', 'ENV->BOOT'],
-        desc: "<b>[BOOT Stage]</b> 用户拉起 <code class='text-amber-300'>--watch</code> 长进程。系统首先读取 <code class='text-amber-300'>swallow.env</code> (密钥与代理) 并调用 <code class='text-purple-300'>loadProjectKnowledge</code> 读取 CLAUDE.md 项目知识基线。",
+        desc: "<b>[BOOT Stage]</b> 用户或外部 Agent 拉起 <code class='text-amber-300'>--watch</code> 长进程。系统首先读取 <code class='text-amber-300'>swallow.env</code> (密钥与代理) 并调用 <code class='text-purple-300'>loadProjectKnowledge</code> 读取 CLAUDE.md 项目知识基线。",
         action: () => {
           stateJson.status = "BOOTSTRAPPING";
           addEvent("BOOTSTRAP_START", "Loading environment and project baseline knowledge");
@@ -603,7 +606,7 @@
         id: 'tick_finish_all',
         activeNodes: ['TICK', 'TASK', 'STATE'],
         activeConns: ['TICK->TASK'],
-        desc: "<b>[All Complete]</b> TICK 扫描 .task.md，确认所有任务均已完成 <code class='text-emerald-400'>[x]</code>。Orchestrator 进程回到 IDLE 状态，等待下一次用户 Trigger 或 Watch 增量变更。",
+        desc: "<b>[All Complete]</b> TICK 扫描 .task.md，确认所有任务均已完成 <code class='text-emerald-400'>[x]</code>。Orchestrator 进程回到 IDLE 状态，等待下一次用户/Agent Trigger 或 Watch 增量变更。",
         action: () => {
           // Mark remaining as completed
           taskMarkdown.forEach(t => t.status = 'completed');
