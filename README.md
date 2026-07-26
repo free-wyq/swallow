@@ -37,6 +37,8 @@ https://raw.githubusercontent.com/free-wyq/swallow/main/install.md
 
 ## 架构图
 
+> 🎬 想看动态版？打开 [`docs/architecture-demo.html`](docs/architecture-demo.html)（浏览器直接渲染，可交互运行演练：架构动态演变 + 触发各种场景看链路）。
+
 ### 整体：推进 + 结果结构化落盘 + 外部 agent 读结果发战报
 
 ```mermaid
