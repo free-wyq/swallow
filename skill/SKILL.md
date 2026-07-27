@@ -119,4 +119,16 @@ swallow --cwd <项目> --resume     # 恢复（删 .stop）
 
 ## 可观测性
 
-完整信号体系（三层可观测面 + 8 类信号维度 + 外部 agent 监控契约）见 [docs/observability.md](../docs/observability.md)。
+swallow 落盘的是**结论**(轮次/进度/健康/卡死),子进程跟模型的对话内容、工具调用细节**不进 swallow**(喂进 events 会瞬间撑爆——单 session 转录就几 MB)。结论够发战报、判异常;真要深挖某轮 Claude 干了啥,去引擎的 session 转录查。
+
+**深挖子进程细节 3 步:**
+
+1. **拿 session_id** —— 从 `night_run.log` 的 `🔗 新会话已建立: <session-id>` 行,或 events.jsonl 的 `session_created` 事件 data.session_id。⚠️ **仅 tick 路径有**;bootstrap/splitTask 路径不落 session_id,这两路想查只能按崩溃时间戳反查 projects 目录(见下)。
+2. **找转录文件** —— 引擎把每个 session 存成 `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`。encoded 规则=cwd 绝对路径的 `/` 换成 `-`(如 `/home/wyq/work/AgenticX/enterprise` → `-home-wyq-work-AgenticX-enterprise`)。encoded 由引擎做,swallow 不参与。
+3. **读转录** —— 每行一个 JSON 事件:`assistant`(消息+thinking)/ `tool_use`(干了啥,带工具名+参数)/ `tool_result`(工具返回)/ `user`(含 last-prompt 即喂给模型的 prompt)。`jq`/`grep` 解析。usage.input_tokens 在 assistant 行的 message.usage 里。
+
+**两个边界(诚实):**
+- **撞 ctx 墙的轮(如 `400 input longer than context length`)被模型拒、无 assistant 响应** → 转录里没那轮的 usage,撞墙的精确 token 数看 `night_run.log` 的 `💥 orchestrator 崩溃` 行。
+- **bootstrap/splitTask 崩溃轮没 session_id 落盘** → 按崩溃时间戳去 `~/.claude/projects/<encoded-cwd>/` 找时间最近的 `.jsonl`(`ls -lat *.jsonl | head`)。
+
+完整信号体系(三层可观测面 + 8 类信号维度 + 外部 agent 监控契约)见 [docs/observability.md](../docs/observability.md)。
