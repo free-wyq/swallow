@@ -120,6 +120,9 @@
       <button id="btn-trigger-overflow" onclick="triggerOverflowScenario()" class="flex items-center gap-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs px-2.5 py-1.5 rounded-lg transition">
         <i class="fa-solid fa-triangle-exclamation"></i> 模拟上下文爆表 (ctx_overflow)
       </button>
+      <button id="btn-trigger-boot-overflow" onclick="triggerBootstrapOverflowScenario()" class="flex items-center gap-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs px-2.5 py-1.5 rounded-lg transition">
+        <i class="fa-solid fa-bomb"></i> 模拟 bootstrap 爆表 (goal 入死信)
+      </button>
 
       <div class="h-4 w-px bg-slate-800 mx-1"></div>
       
@@ -415,6 +418,7 @@
     let timer = null;
     let speed = 1500;
     let triggerOverflow = false;
+    let triggerBootOverflow = false;
 
     // Data Structures
     let taskMarkdown = [];
@@ -464,7 +468,10 @@
       { from: 'DLQ', to: 'SPLIT', label: '触发拆分' },
       { from: 'SPLIT', to: 'TICK', label: '子 task 插回' },
       { from: 'Ext', to: 'STATE', label: '读已落盘结果' },
-      { from: 'Ext', to: 'Push', label: '发战报' }
+      { from: 'Ext', to: 'Push', label: '发战报' },
+      { from: 'BOOT', to: 'DLQ', label: 'goal 爆→入死信', type: 'error' },
+      { from: 'DLQ', to: 'BOOT', label: '子 goal 独立 bootstrap' },
+      { from: 'BOOT', to: 'TASK', label: '子 goal 拆 task 追加', type: 'success' }
     ];
 
     // Execution sequence steps for the visual workflow simulation
@@ -481,23 +488,59 @@
       },
       {
         id: 'boot_write_task',
-        activeNodes: ['BOOT', 'TASK'],
-        activeConns: ['BOOT->TASK', 'BOOT->TICK'],
-        desc: "<b>[BOOT -> TASK]</b> BOOT 阶段分析 Goal 目标，拆解出初始任务列表，并首次写出 <code class='text-emerald-300'>.task.md</code> 作为进度真相源。随后交由 <code class='text-amber-300 font-bold'>TICK</code> 主循环。",
-        action: () => {
-          stateJson.status = "RUNNING";
-          addEvent("TASK_DISPATCH", "Initial .task.md created with 3 core tasks");
+        getDynamicStep: () => {
+          if (triggerBootOverflow) {
+            return {
+              activeNodes: ['BOOT', 'DLQ', 'STATE'],
+              activeConns: ['BOOT->DLQ'],
+              desc: "<b>[⚠️ bootstrap ctx_overflow]</b> Goal 过大，<code class='text-amber-300'>bootstrapTasks</code> 单次拆不完，撞上下文爆表。<code class='text-red-400'>不 process.exit</code>——goal 整体压入 <code class='text-red-400'>state.dead_letter</code>（type=goal），<code class='text-amber-300 font-bold'>watch 继续</code>，下 tick 出队交 <code class='text-amber-300'>splitTask</code> 拆子 goal。",
+              action: () => {
+                stateJson.status = "DLQ_PENDING";
+                stateJson.dead_letter.push({ type: 'goal', content: 'Refactor core module and update architecture', reason: 'bootstrap ctx_overflow', timestamp: new Date().toISOString() });
+                taskMarkdown = [];
+                addEvent("BOOTSTRAP_TO_DLQ", "Goal too large for single bootstrap. Pushed to dead_letter (type=goal). Watch continues.");
+              }
+            };
+          }
+          return {
+            activeNodes: ['BOOT', 'TASK'],
+            activeConns: ['BOOT->TASK', 'BOOT->TICK'],
+            desc: "<b>[BOOT -> TASK]</b> BOOT 阶段分析 Goal 目标，拆解出初始任务列表，并首次写出 <code class='text-emerald-300'>.task.md</code> 作为进度真相源。随后交由 <code class='text-amber-300 font-bold'>TICK</code> 主循环。",
+            action: () => {
+              stateJson.status = "RUNNING";
+              addEvent("TASK_DISPATCH", "Initial .task.md created with 3 core tasks");
+            }
+          };
         }
       },
       {
-        id: 'tick_start_task1',
-        activeNodes: ['TICK', 'RUN', 'TASK'],
-        activeConns: ['TICK->RUN'],
-        desc: "<b>[TICK Step 1]</b> <code class='text-amber-300'>TICK</code> 进入幂等单步循环，读取 <code class='text-emerald-300'>.task.md</code> 中首个未完成的任务 [<code class='text-indigo-300'>task-1</code>] 并标注状态为进行中 <code class='text-amber-400'>[~]</code>。",
-        action: () => {
-          taskMarkdown[0].status = 'in_progress';
-          stateJson.current_task_id = 'task-1';
-          addEvent("TICK_READ", "Found uncompleted task-1: 读取 CLAUDE.md 分析架构");
+        id: 'dlq_goal_split',
+        getDynamicStep: () => {
+          if (triggerBootOverflow) {
+            return {
+              activeNodes: ['DLQ', 'SPLIT', 'BOOT'],
+              activeConns: ['DLQ->BOOT'],
+              desc: "<b>[DLQ 出队 → 子 goal 独立 bootstrap]</b> 下 tick 开头检测到 <code class='text-red-400'>state.dead_letter</code> 非空，出队第一个 type=goal 项，交 <code class='text-amber-300'>splitTask</code> 拆成 2 个子 goal。每个子 goal <code class='text-amber-300'>逐个独立 bootstrap</code>（append=true 追加进 .task.md，不覆盖）——同构递归，子 goal 自己爆了再入死信。",
+              action: () => {
+                stateJson.dead_letter.shift();
+                taskMarkdown = [
+                  { id: 'goal-a-task-1', title: '子 goal A: 重构核心模块（拆出 task）', status: 'pending', retry: 0 },
+                  { id: 'goal-a-task-2', title: '子 goal A: 补架构文档', status: 'pending', retry: 0 }
+                ];
+                addEvent("GOAL_SPLIT", "Dead-letter goal split into 2 sub-goals. Each bootstraps independently (append).");
+              }
+            };
+          }
+          return {
+            activeNodes: ['TICK', 'RUN', 'TASK'],
+            activeConns: ['TICK->RUN'],
+            desc: "<b>[TICK Step 1]</b> <code class='text-amber-300'>TICK</code> 进入幂等单步循环，读取 <code class='text-emerald-300'>.task.md</code> 中首个未完成的任务 [<code class='text-indigo-300'>task-1</code>] 并标注状态为进行中 <code class='text-amber-400'>[~]</code>。",
+            action: () => {
+              taskMarkdown[0].status = 'in_progress';
+              stateJson.current_task_id = 'task-1';
+              addEvent("TICK_READ", "Found uncompleted task-1: 读取 CLAUDE.md 分析架构");
+            }
+          };
         }
       },
       {
@@ -569,12 +612,14 @@
               desc: "<b>[SPLIT 拆解插回]</b> <code class='text-amber-300'>splitTask</code> 将爆表的 task-2 拆解为 2 个更小的子任务 [<code class='text-indigo-300'>task-2a</code>] 与 [<code class='text-indigo-300'>task-2b</code>]，并插回 <code class='text-emerald-300'>.task.md</code> 顶部，供 TICK 无缝重启继续迭代！",
               action: () => {
                 // Replace failed task-2 with subtasks
-                taskMarkdown.splice(1, 1, 
+                taskMarkdown.splice(1, 1,
                   { id: 'task-2a', title: '拆分 2a: 模块接口抽象与解耦', status: 'pending', retry: 0 },
                   { id: 'task-2b', title: '拆分 2b: 算法子功能实现', status: 'pending', retry: 0 }
                 );
                 triggerOverflow = false; // reset flag
+                triggerBootOverflow = false;
                 document.getElementById('btn-trigger-overflow').classList.remove('bg-amber-500/40', 'border-amber-400');
+                document.getElementById('btn-trigger-boot-overflow').classList.remove('bg-rose-500/40', 'border-rose-400');
                 addEvent("TASK_SPLIT", "Task-2 split into task-2a and task-2b. Re-inserted into task flow.");
               }
             };
@@ -854,8 +899,18 @@
       triggerOverflow = true;
       const btn = document.getElementById('btn-trigger-overflow');
       btn.classList.add('bg-amber-500/40', 'border-amber-400');
-      
+
       addEvent("USER_INJECT", "Trigger set: Next task execution will force ctx_overflow scenario.");
+    }
+
+    function triggerBootstrapOverflowScenario() {
+      triggerBootOverflow = true;
+      const btn = document.getElementById('btn-trigger-boot-overflow');
+      btn.classList.add('bg-rose-500/40', 'border-rose-400');
+      // 回到 boot 阶段重放（currentStepIndex 设到 boot_init 之后，下个 stepNext 走动态分支）
+      currentStepIndex = 1;
+      goToStep(0);
+      addEvent("USER_INJECT", "Trigger set: Bootstrap will overflow → goal enters dead_letter queue.");
     }
 
     function resetSim() {
@@ -863,10 +918,12 @@
       clearTimeout(timer);
       currentStepIndex = 0;
       triggerOverflow = false;
+      triggerBootOverflow = false;
 
       document.getElementById('label-play').textContent = "开始运行";
       document.getElementById('icon-play').className = "fa-solid fa-play";
       document.getElementById('btn-trigger-overflow').classList.remove('bg-amber-500/40', 'border-amber-400');
+      document.getElementById('btn-trigger-boot-overflow').classList.remove('bg-rose-500/40', 'border-rose-400');
 
       resetDataState();
 

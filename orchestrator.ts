@@ -265,6 +265,7 @@ interface RoundOutcome {
   aborted: boolean;
   postTokens: number | null;  // 压缩后总 token（/compact deep 探针用，普通轮=null）
   maxTokens: number | null;   // 模型上下文窗口（runOneTask 首个 tool 间隙 getContextUsage 捕获）
+  finalText: string;          // result.result（subtype 守卫后取），结局标记 OUTCOME:* 从这解析
 }
 
 // 上下文探针：ctx 偏重时先发 /compact deep 试压一轮，看能不能把会话压下来。
@@ -350,7 +351,10 @@ function buildPrompt(taskLine: string): string {
 
 ## 规则
 - 一次只做一个任务。不要自己改 .task.md 勾选状态——打勾由外部脚本负责。
-- 本轮结束直接结束，不要输出总结。`;
+- 本轮结束时，回复最后一行单独输出结局标记，三选一，前面不许有其他文字：
+  - \`OUTCOME:COMPLETED\` —— 本轮实际改了代码完成任务
+  - \`OUTCOME:ALREADY_DONE\` —— 检查后判定任务代码已存在且实现完整（下一行附证据：Read 了哪些 文件:函数）
+  - \`OUTCOME:BLOCKED\` —— 遇到无法自行解决的阻塞（下一行说明卡在哪）`;
 }
 
 // 当前 runOneTask 的 AbortController——提模块级让信号 handler 够得着（abort → SDK close 杀 claude 子进程）。
@@ -441,7 +445,12 @@ async function runOneTask(taskLine: string, sessionId: string | null, onHeartbea
     if (activeAbort === ac) activeAbort = null;
   }
 
-  return { result: resultMsg, wroteFiles, toolCalls, aborted, postTokens: null, maxTokens: capturedMaxTokens };
+  return { result: resultMsg, wroteFiles, toolCalls, aborted, postTokens: null, maxTokens: capturedMaxTokens,
+    // 结局标记 OUTCOME:* 从这段文本解析（同 splitTask L1168 / bootstrapTasks L1281 守卫写法：
+    // success 取 r.result，错误分支无 result 字段退 errors 拼接；resultMsg 为 null 则空串）
+    finalText: resultMsg
+      ? (resultMsg.subtype === "success" ? (resultMsg.result ?? "") : (resultMsg.errors ?? []).join("\n"))
+      : "" };
 }
 
 // ---------------- state.json + events.jsonl 持久化 ----------------
@@ -944,7 +953,7 @@ async function tick(): Promise<TickOutcome> {
       flushPendingCounts(state);
       writeStateJsonAtomic(state);
     };
-    const { result, wroteFiles, toolCalls, aborted, maxTokens } = await runOneTask(taskLine, sessionId, onHeartbeat);
+    const { result, wroteFiles, toolCalls, aborted, maxTokens, finalText } = await runOneTask(taskLine, sessionId, onHeartbeat);
 
     // 捕获模型上下文窗口（首轮拿到就缓存进 state，后续复用；拿不到留 null，健康度判定自动跳过）
     if (state.ctx_max_tokens === null && typeof maxTokens === "number" && maxTokens > 0) {
@@ -1015,23 +1024,47 @@ async function tick(): Promise<TickOutcome> {
       return { kind: "session_dropped" };
     }
 
-    // 步骤15: didRealWork 判定（看 PostToolUse hook 捕获的真实写入，不是 git diff 猜测）
-    const didRealWork = wroteFiles.length > 0;
-    if (didRealWork) {
+    // 步骤15: 结局标记 × 写文件 对照分流（取代旧「只看 wroteFiles」单信号）
+    // Claude 末尾输出 OUTCOME:COMPLETED/ALREADY_DONE/BLOCKED（约定见 buildPrompt 末尾），swallow 解析后与客观写动作对照：
+    //   - 写了代码 → 事实优先，commit+打勾（不管 Claude 自报什么）
+    //   - ALREADY_DONE + 没写 → 软阻塞 [~] 等人工核（不静默放行，保留偏假阴性）
+    //   - BLOCKED + 没写 → 直接 [~] 跳过（不等 stall 烧 3 轮）
+    //   - 其余没写（COMPLETED-没动手可疑 / 未声明）→ stall
+    const m = finalText.match(/OUTCOME:(COMPLETED|ALREADY_DONE|BLOCKED)/);
+    const outcomeTag = m?.[1] ?? null;
+    const didWrite = wroteFiles.length > 0;
+
+    if (didWrite) {
+      // 事实优先：写了代码 → commit + 打勾 [x]（哪怕 Claude 说 ALREADY_DONE 却改了文件，也以客观写动作为准）
       tickFirst();
       const committed = gitCommitIfChanged(taskLine);
       if (committed) state.had_any_commit = true;
-      log(`⏱️ 第 ${state.loop_count} 轮结束：写入 ${wroteFiles.length} 文件 / ${toolCalls} 工具调用（${committed ? "已提交" : "无暂存"}）`);
+      log(`⏱️ 第 ${state.loop_count} 轮结束：写入 ${wroteFiles.length} 文件 / ${toolCalls} 工具调用（${committed ? "已提交" : "无暂存"}）[outcome=${outcomeTag ?? "未声明"}]`);
       state.stall_task = null;
       state.stall_count = 0;
       state.session_retries = 0;
-      appendEvent("task_completed", { task: taskKey, wrote_files: wroteFiles, committed }, { tick_id: tickId, loop_count: state.loop_count });
+      appendEvent("task_completed", { task: taskKey, wrote_files: wroteFiles, committed, outcome: outcomeTag }, { tick_id: tickId, loop_count: state.loop_count });
+    } else if (outcomeTag === "ALREADY_DONE") {
+      // 判已完成 + 没写代码 → 软阻塞 [~] 等人工核（不 commit 不打勾，不静默放行；had_any_commit 仍假 → 收尾 suspected_false_completion 兜底）
+      blockFirst();
+      log(`🔖 任务判已完成（未写代码），标 [~] 软阻塞等人工核: ${taskKey}`);
+      appendEvent("task_already_done", { task: taskKey, evidence: finalText.slice(0, 500), outcome: outcomeTag }, { tick_id: tickId, loop_count: state.loop_count });
+      state.stall_task = null;
+      state.stall_count = 0;
+      state.session_retries = 0;
+    } else if (outcomeTag === "BLOCKED") {
+      // 主动报卡 → 直接标 [~] 阻塞跳过，不等 stall 烧 3 轮
+      blockFirst();
+      log(`🚧 任务主动报阻塞，标 [~] 跳过: ${taskKey}`);
+      appendEvent("task_blocked", { task: taskKey, reason: "self_reported_blocked", evidence: finalText.slice(0, 500) }, { tick_id: tickId, loop_count: state.loop_count });
+      state.stall_task = null;
+      state.stall_count = 0;
     } else {
-      // 零改动：worker 判了"已完成"但没写代码 → 记空转，不打勾
+      // 没写代码 + 不是 ALREADY_DONE/BLOCKED → stall（含 COMPLETED-没动手的可疑情况、UNKNOWN 未声明）
       state.stall_task = taskKey;
       state.stall_count++;
       log(`⏸️ 零改动空转 #${state.stall_count}: ${taskKey}`);
-      appendEvent("task_stall", { task: taskKey, stall_count: state.stall_count, limit: STALL_LIMIT }, { tick_id: tickId, loop_count: state.loop_count });
+      appendEvent("task_stall", { task: taskKey, stall_count: state.stall_count, limit: STALL_LIMIT, outcome: outcomeTag }, { tick_id: tickId, loop_count: state.loop_count });
       if (state.stall_count >= STALL_LIMIT) {
         blockFirst();
         log(`🚧 连续 ${STALL_LIMIT} 次空转，标 [~] 阻塞跳过，推进下一任务`);
@@ -1057,9 +1090,11 @@ async function tick(): Promise<TickOutcome> {
       return { kind: "terminated" };
     }
     writeStateJsonAtomic(state);
-    const outcome: TickOutcome["kind"] = didRealWork ? "advanced" : (state.stall_count > 0 ? "stalled" : "blocked");
+    // 前三分支（写代码 / ALREADY_DONE / BLOCKED）都推进了任务（打勾或软/硬阻塞后过到下一任务），stall 才停。
+    const advanced = didWrite || outcomeTag === "ALREADY_DONE" || outcomeTag === "BLOCKED";
+    const outcome: TickOutcome["kind"] = advanced ? "advanced" : (state.stall_count > 0 ? "stalled" : "blocked");
     appendEvent("tick_completed", { outcome }, { tick_id: tickId, loop_count: state.loop_count });
-    return didRealWork ? { kind: "advanced" } : (state.stall_count > 0 ? { kind: "stalled" } : { kind: "blocked" });
+    return advanced ? { kind: "advanced" } : (state.stall_count > 0 ? { kind: "stalled" } : { kind: "blocked" });
   } finally {
     // 步骤16 续: 释放 flock（finally 保证异常/崩溃也释放）
     releaseLock();
