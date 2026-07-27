@@ -178,7 +178,7 @@ cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥�
 | `swallow --cwd <proj> --status --json` | 结构化 JSON（给程序读，跨平台零依赖） |
 | `swallow --cwd <proj> --report` | 运行报告 |
 | `swallow --cwd <proj> --stop` | 停（写 `.stop` 哨兵 + 杀 `--watch`） |
-| `swallow --cwd <proj> --resume` | 清 `.stop` 哨兵恢复 |
+| `swallow --cwd <proj> --resume` | 恢复运行（删 `.stop` 哨兵，watch 没在跑则从 state.json 拉起） |
 
 `--cwd` 决定三件事，三者统一：① 产物写入处 ② `git commit` 的仓库 ③ 会话工作目录。不传则回退 `SWALLOW_PROJECT` 环境变量或当前目录。**别在 swallow 仓库根目录裸跑**——会把产物写进 swallow 仓库并 commit 它。
 
@@ -235,7 +235,7 @@ swallow --cwd /path/to/project "构建一个 Go REST API"
 | `events.jsonl` | append-only 审计流，`--status`/`--report` 从它读；超阈值轮转归档 `events.jsonl.1` |
 | `.task.md` | 任务列表 + 勾选状态（`[ ]`/`[x]`/`[~]`）——进度真相源 |
 | `.session_id` | Claude 会话 ID（单源，不进 state.json） |
-| `.stop` | 停止哨兵（`--stop` 写，`--resume` 删） |
+| `.stop` | 停止哨兵（`--stop` 写，`--resume` 删后拉起 watch） |
 | `.tick.lock` | 进程级并发锁 |
 | `night_run.log` | 人类可读文本日志 |
 
@@ -277,7 +277,7 @@ swallow --cwd /path/to/project "构建一个 Go REST API"
 - e2e happy path：2 任务全跑通、2 commit、events 配对完整、state.json 正确
 - **崩溃恢复**：`kill -9` 后 state.json 完好、.task.md 未误打勾、锁 stale 自动 takeover、loop_count 不丢、下次 tick 从崩溃处续跑
 - flock 并发：两个 watch 同时，第二个立即 already_running
-- `--stop` 哨兵：watch 收 SIGTERM 退出 + 写 .stop，`--resume` 恢复
+- `--stop` 哨兵：watch 收 SIGTERM 退出 + 写 .stop，`--resume` 删哨兵并在 watch 未跑时从 state.json 拉起
 - 假完成守卫：全 `[x]` 零 commit → 疑假完成，不设 last_termination 待人工介入
 - **死信队列 + lazy 拆**（2026-07-25 全绿）：① 兜底停 watch 确定性（seed `dlq_split_count=30` → 队列清空进 failed_tasks、watch 立即 terminated、未调 splitTask）；② smoke 回归（小 goal 真跑 bootstrap→task→commit→done 未被死信改动破坏）；③ 出队链路（seed task 真跑 splitTask 拆 5 项→`insertTasksBeforeFirst` 插回→逐个 commit）。详见 [docs/dead-letter-design.md](docs/dead-letter-design.md) §13
 

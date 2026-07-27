@@ -7,7 +7,7 @@
 //   npx tsx orchestrator.ts [--cwd <项目目录>] --status --json   # 结构化 JSON（给程序读，跨平台零依赖）
 //   npx tsx orchestrator.ts [--cwd <项目目录>] --report         # 运行报告
 //   npx tsx orchestrator.ts [--cwd <项目目录>] --stop            # 写 .stop 哨兵 + 杀 --watch PID
-//   npx tsx orchestrator.ts [--cwd <项目目录>] --resume         # 删 .stop 哨兵
+//   npx tsx orchestrator.ts [--cwd <项目目录>] --resume         # 删 .stop 哨兵 + 若 watch 没在跑则拉起（恢复运行）
 //
 // --cwd 指定目标项目目录（产物写入处 + git commit 的仓库 + 会话工作目录）；不传则用当前目录
 // 或 SWALLOW_PROJECT 环境变量。
@@ -1560,14 +1560,28 @@ function stopAll() {
   console.log("已写 .stop 哨兵。下次 tick 会跳过。用 --resume 清除哨兵恢复。");
 }
 
-// --resume：删 .stop 哨兵
-function resumeRun() {
+// --resume = 恢复运行：删 .stop 哨兵 + 若 watch 没在跑就拉起。
+// 语义对齐「resume = 恢复运行」，而非旧的「只删哨兵」（旧版在 --stop 已杀进程的场景下是空操作，
+// 用户得再跑一次 swallow 才真正恢复——Hermes 踩过坑）。goal 从 state.json 读，无需用户再传。
+async function resumeRun() {
   if (existsSync(STOP_FILE)) {
     rmSync(STOP_FILE, { force: true });
-    console.log("已删除 .stop 哨兵，恢复 tick/watch");
+    log("已删除 .stop 哨兵");
   } else {
-    console.log("无 .stop 哨兵，无需恢复");
+    log("无 .stop 哨兵");
   }
+  const { running, pid } = watchRunning();
+  if (running) {
+    log(`watch 进程已在跑（PID=${pid}），哨兵已清，下次 tick 自动继续推进`);
+    return;
+  }
+  const goal = existsSync(STATE_FILE) ? readStateJson().goal : "";
+  if (!goal) {
+    console.error("无法恢复：无 .stop 哨兵可清、且 state.json 无 goal，无恢复点。直接跑 swallow --cwd <项目> \"目标\" 重新开始。");
+    process.exit(1);
+  }
+  log(`watch 未在跑，从 state.json 恢复点拉起（goal: ${goal.slice(0, 60)}...）`);
+  await watch(goal);
 }
 
 // ---------------- 入口 ----------------
@@ -1643,7 +1657,7 @@ async function main() {
   if (action === "status") { showStatus(json ?? false); return; }
   if (action === "report") { showReport(); return; }
   if (action === "stop") { stopAll(); return; }
-  if (action === "resume") { resumeRun(); return; }
+  if (action === "resume") { await resumeRun(); return; }   // resume 可能拉起 watch（async）
 
   // --watch 或裸跑
   if (action === "watch" || !action) {

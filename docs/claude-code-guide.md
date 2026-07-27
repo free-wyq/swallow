@@ -63,7 +63,7 @@ Claude Code 用 Bash 跑 `swallow --cwd <项目> --status`，把多行实时状�
 
 ## 常用操作（都对 Claude Code 说）
 
-- 「停一下 swallow」/「恢复 swallow」（`--stop` 写哨兵 / `--resume` 删哨兵）
+- 「停一下 swallow」/「恢复 swallow」（`--stop` 写哨兵 / `--resume` 删哨兵并在 watch 未跑时从 state.json 拉起）
 - 「出个运行报告」
 - 「看下 `.task.md` 任务列表」
 

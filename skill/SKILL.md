@@ -25,11 +25,11 @@ swallow --cwd <项目> --status     # 实时状态（人看）
 swallow --cwd <项目> --status --json   # 结构化 JSON（程序读，跨平台零依赖）
 swallow --cwd <项目> --report     # 运行报告
 swallow --cwd <项目> --stop        # 临时停（写 .stop 哨兵）
-swallow --cwd <项目> --resume     # 恢复（删 .stop）
+swallow --cwd <项目> --resume     # 恢复运行（删 .stop 哨兵 + 若 watch 没在跑则从 state.json 拉起）
 ```
 
 ⚠️ 目标项目绝不能是 swallow 仓库自身——会污染 git 历史。
-⚠️ 停 swallow 用 `--stop`，别 `kill -9` watch 父进程——`--stop` 发 SIGTERM 会联动终止 claude 子进程后干净退出；`kill -9` 会让 claude 子进程变孤儿继续烧 token。`--resume` 清哨兵恢复。
+⚠️ 停 swallow 用 `--stop`，别 `kill -9` watch 父进程——`--stop` 发 SIGTERM 会联动终止 claude 子进程后干净退出；`kill -9` 会让 claude 子进程变孤儿继续烧 token。`--resume` 恢复运行：删 `.stop` 哨兵，watch 没在跑时自动从 `state.json` 拉起（goal 从 state.json 读，无需再传）。
 
 ## 结构化结果（你发战报的数据源）
 
