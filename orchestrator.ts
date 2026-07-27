@@ -1303,26 +1303,41 @@ ${knowledge}
   });
   let text = "";
   let bootstrapOverflow = false;   // ctx_overflow 检测（dead-letter-design §6.2）
-  for await (const msg of q) {
-    if (msg.type === "result") {
-      const r = msg as SDKResultMessage;
-      // ctx_overflow 判定照 tick L806 同款结构化判法（subtype + errors/stop_reason，不 stringify+正则）
-      if (r.subtype === "error_during_execution" && (
-        r.errors?.some((e) => /context|exceed|too long/i.test(e))
-        || /context/i.test(r.stop_reason ?? "")
-      )) {
-        bootstrapOverflow = true;
-      }
-      text = r.subtype === "success" ? (r.result ?? "") : (r.errors ?? []).join("\n");
-    } else if (msg.type === "assistant") {
-      const content = (msg as { content?: unknown }).content;
-      if (Array.isArray(content)) {
-        for (const b of content) {
-          if (b && typeof b === "object" && (b as { type?: string }).type === "text") {
-            text += (b as { text?: string }).text ?? "";
+  try {
+    for await (const msg of q) {
+      if (msg.type === "result") {
+        const r = msg as SDKResultMessage;
+        // ctx_overflow 判定照 tick L806 同款结构化判法（subtype + errors/stop_reason，不 stringify+正则）
+        if (r.subtype === "error_during_execution" && (
+          r.errors?.some((e) => /context|exceed|too long/i.test(e))
+          || /context/i.test(r.stop_reason ?? "")
+        )) {
+          bootstrapOverflow = true;
+        }
+        text = r.subtype === "success" ? (r.result ?? "") : (r.errors ?? []).join("\n");
+      } else if (msg.type === "assistant") {
+        const content = (msg as { content?: unknown }).content;
+        if (Array.isArray(content)) {
+          for (const b of content) {
+            if (b && typeof b === "object" && (b as { type?: string }).type === "text") {
+              text += (b as { text?: string }).text ?? "";
+            }
           }
         }
       }
+    }
+  } catch (e) {
+    // ctx 超限（如 400 "input longer than the model's context length"）在迭代期直接抛异常，
+    // 到不了上面 result 消息的结构化判定。照 runOneTask L440 try/catch 对称补：命中 ctx 关键词
+    // → 置 bootstrapOverflow 走已有死信分流（下方 bootstrapOverflow||truncated 分支，goal 入 DLQ）；
+    // 非 ctx 类（鉴权/网络等）仍上抛——不该静默吞，让 main().catch 记完整栈再退出。
+    // （对称 tick L991 isCtxOverflow 关键词，单一来源同款正则。）
+    const errMsg = (e as Error).message ?? String(e);
+    if (/context|exceed|too long/i.test(errMsg)) {
+      bootstrapOverflow = true;
+    } else {
+      log(`⚠️ bootstrap query 异常: ${errMsg}`);
+      throw e;
     }
   }
   const taskLines = text.split("\n").filter((l) => /^- \[ \]/.test(l));
