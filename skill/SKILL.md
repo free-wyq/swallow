@@ -7,15 +7,18 @@ description: "用于要持续干很久、人不想盯着的活——如「帮我
 
 swallow 自驱推进开发任务、把结果结构化落盘，**不发战报、不推送**；外部 agent（你）定时读结果、组织战报、推送到你的频道。
 
+## 适用场景（先判断，避免重复折腾）
+
+- **skill 已注册**（`run.sh` 在你的 skills 目录里）→ 直接跳「用法」节跑，不询问。
+- **没注册 / 首次用** → 按 [install.md](../install.md) 走（克隆代码 → `cp -r skill` 注册进你的 skills 目录 → 配密钥），装好回来。本文只讲怎么用、怎么看状态、怎么发战报。
+
 ## 铁律（外部 agent 必须遵守）
 
 - 只把任务目标（goal）交给脚本，脚本自己拆任务。
 - 禁止编辑 `.task.md`。
 - 禁止自己拆任务——无论从哪里抠任务都不行。
 
-推进靠 `--watch` 长进程，崩了重启续跑（重启后从 `state.json` 恢复点继续，不丢进度、不重复打勾）。
-
-> 没装好先看 [install.md](../install.md)（装好 → 注册进你的 skills 目录 → 配密钥）。本文只讲怎么用、怎么看状态、怎么发战报。skill 自带脚本（`orchestrator.ts` + `run.sh`），**注册即用**——直接跑本 skill 目录里的 `run.sh`，不依赖 PATH 里的 `swallow` 命令；首次运行时 `run.sh` 自动把依赖懒加载到 `~/.local/share/swallow/deps`（共享缓存，和代码树分离），无需预装。
+推进靠 `--watch` 长进程，崩了重启续跑（重启后从 `state.json` 恢复点继续，不丢进度、不重复打勾）。skill 自带脚本（`orchestrator.ts` + `run.sh`），**注册即用**——直接跑本 skill 目录里的 `run.sh`，不依赖 PATH；首次运行自动把依赖懒加载到 `~/.local/share/swallow/deps`（共享缓存，幂等跳过）。
 
 ## 用法
 
@@ -35,52 +38,19 @@ bash "$RUN" --cwd <项目> --resume          # 恢复运行（删 .stop 哨兵 +
 
 ⚠️ 目标项目绝不能是 swallow 仓库自身——会污染 git 历史。
 ⚠️ 停 swallow 用 `--stop`，别 `kill -9` watch 父进程——`--stop` 发 SIGTERM 会联动终止 claude 子进程后干净退出；`kill -9` 会让 claude 子进程变孤儿继续烧 token。`--resume` 恢复运行：删 `.stop` 哨兵，watch 没在跑时自动从 `state.json` 拉起（goal 从 state.json 读，无需再传）。
-⚠️ `run.sh` 首次跑会拉 ~530MB 依赖到 `~/.local/share/swallow/deps`（共享缓存，幂等跳过）；缺 Node 18+ / 缺密钥会提前提示，不会撞到莫名其妙错。
+⚠️ `run.sh` 首次跑自动拉 ~530MB 依赖到 `~/.local/share/swallow/deps`（共享缓存，幂等跳过）；缺 Node 18+ / 缺密钥会提前提示，不会撞到莫名错。
 
 ## 结构化结果（你发战报的数据源）
 
-### state.json（恢复点快照）
+三文件各司其职：`state.json`（恢复点快照，机器读）+ `events.jsonl`（append-only 审计流）+ `.task.md`（任务列表 + 勾选状态 `[ ]`/`[x]`/`[~]`，进度真相源）。
 
-```jsonc
-{
-  "goal": "构建一个 Go REST API",
-  "loop_count": 15,                  // 已跑轮数
-  "status": "running",               // running/idle/completed/blocked_suspect/ctx_overflow_retry
-  "last_tick_at": "2026-07-24 14:00:00",    // 上轮 tick 时间
-  "last_heartbeat_at": "2026-07-24 14:00:30", // runOneTask 期间的心跳，判 watch 卡死
-  "last_termination": null,          // {reason:"done",ts}|null，非 null=已结束
-  "stall_count": 0,                  // 当前任务连续空转次数
-  "had_any_commit": true,            // 是否有过真实 commit
-  "last_input_tokens": 164814,       // 上轮上下文占用
-  "ctx_max_tokens": 200000,         // 模型上下文窗口
-  "event_counts": {"task_completed": 14, "task_stall": 1},  // 事件累计计数
-  "dead_letter": [],                  // 死信队列（爆掉的 task/goal 待拆，暂态）
-  "failed_tasks": [],                 // 真失败册（拆到底做不了，终态）
-  "dlq_split_count": 0                 // splitTask 累计调用次数（防死循环）
-}
-```
+字段语义、事件类型清单、判崩溃规则、`--status --json` 汇总结构（含 `dead_letter` 块字段）——见 [docs/observability.md](../docs/observability.md) §3（按维度详述）+ §4（消费出口）。
 
-`last_termination.reason` 取值：`done`（正常完成）/ `dead_letter_exhausted`（死信队列兜底停，横向 `failed_tasks>=5` 或纵向 `dlq_split_count>=30` 任一触发，需人工介入）。
-
-判 watch 卡死：`last_heartbeat_at` 比当前时间老超过 60 分钟且 `status=running` → watch 可能卡死（进程没崩但 query 挂死），需人工介入或重启。`last_tick_at` tick 期间冻结，不能单独判卡死。
-
-### events.jsonl（append-only 审计流）
-
-每行一个事件：`{"ts":"...","type":"task_completed","tick_id":"...","loop_count":15,"data":{...}}`
-
-事件类型：`tick_started` / `tick_completed` / `tick_skipped`（已终止/已锁，跳过） / `tick_locked`（拿锁，并发 watch 第二个触发） / `bootstrap_completed` / `task_completed` / `task_stall` / `task_blocked` / `session_created` / `session_resumed` / `session_dropped` / `aborted` / `done` / `suspected_false_completion` / `compact_probe_ok` / `compact_probe_failed` / `task_to_dlq` / `bootstrap_to_dlq` / `task_split` / `task_failed` / `dead_letter_exhausted` 等。
-
-**判崩溃**：`tick_started` 无同 `tick_id` 的 `tick_completed` = 该 tick 崩溃。
-**判并发冲突**：出现 `tick_locked` 说明第二个 watch 试图启动（已被锁挡掉，正常）。
-**判已终止空转**：重启后若立刻 `tick_skipped`，多半是 `last_termination` 还在挡（见「已知行为」）。
-
-### .task.md（进度真相源）
-
-任务列表 + 勾选状态：`[ ]` 未完成 / `[x]` 已完成 / `[~]` 阻塞。进度数从这读。
+**速查：判 watch 卡死**（发战报最常查）——`last_heartbeat_at` 比当前时间老超过 60 分钟且 `status=running` → watch 可能卡死（进程没崩但 query 挂死），需人工介入或重启。`last_tick_at` tick 期间冻结，不能单独判卡死。
 
 ## 发战报
 
-起定时任务读上述文件，按你的判断组织战报。推荐用 `bash "$RUN" --cwd <项目> --status --json` —— 它已把 state.json + .task.md + events 末尾 + watch 进程汇总成单一 JSON（含 `dead_letter` 块：`queue_len`/`dlq_split_count`/`dlq_split_limit`/`failed_count`/`failed_task_limit`/`queue`/`failed`），跨平台零依赖，不必自己解析 state.json。⚠️ 解析数字字段时若跑在带 `FORCE_COLOR` 的环境，用 `env -u FORCE_COLOR` 或读 `JSON.parse` 后取值，别比较原始 stdout（node 会给数字加 ANSI 色污染断言）。参考格式（非强制）：
+起定时任务读上述文件，按你的判断组织战报。推荐用 `bash "$RUN" --cwd <项目> --status --json` —— 跨平台零依赖、把 state.json + .task.md + events 末尾 + watch 进程汇总成单一 JSON（字段结构见 [observability.md §4.2](../docs/observability.md)）。⚠️ 解析数字字段时若跑在带 `FORCE_COLOR` 的环境，用 `env -u FORCE_COLOR` 或读 `JSON.parse` 后取值，别比较原始 stdout（node 会给数字加 ANSI 色污染断言）。参考格式（非强制）：
 
 ```
 📊 swallow 战报 20:38
@@ -120,8 +90,8 @@ bash "$RUN" --cwd <项目> --resume          # 恢复运行（删 .stop 哨兵 +
 - **bootstrap 慢属正常**：目标里若含 SPA 链接（腾讯文档等），WebFetch 拿不到表格数据，worker 会写 Playwright 脚本爬取——可能耗时 10+ 分钟但最终能成。别手动预写 `.task.md`（自己拆的任务可能不符合 goal 结构）。
 - **项目已 done 后跑新缺陷**：直接重启会被 `state.json` 的 `last_termination={reason:"done"}` 挡掉（tick 直接 already_terminated 跳过）。要继续跑，清掉 `state.json` 的 `last_termination` 字段（置 `null`）或换新 goal 触发重新 bootstrap。`dead_letter_exhausted` 同理（兜底停了 watch，清该字段或换 goal 才能重启）。
 - **撞 blocked_suspect 先看探针**：`status=blocked_suspect`（疑假完成）或 `ctx_overflow_retry` 频繁时，查 events.jsonl 有没有 `compact_probe_ok`——有探针压成功说明 ctx 在自我回收；没有就是真撞墙，多半是目标项目上下文太大，可在项目根放 `.claudeignore` 压扫描范围。
-- **死信队列兜底停**：`last_termination=dead_letter_exhausted` 说明任务大到连拆都拆不动（横向 5 个不同 task 各自拆不出 / 纵向拆 30 次还在拆 = 子任务互相依赖死循环）。查 events 的 `task_split` 链看是哪个 task 反复爆，人工拆解或换更小 goal。详见 [docs/dead-letter-design.md](../docs/dead-letter-design.md)。
-- **死信队列在拆分中**：`--status` 见 `dead_letter.queue_len > 0` 属正常（task 太大一个会话装不下，正在 `splitTask` 拆子项回插）。关注 `dlq_split_count` 接近 30（纵向死循环将至）或 `failed_count` 涨（横向拆不出在累积）——这两个接近上限就是兜底将至的前兆。
+- **死信队列兜底停**：`last_termination=dead_letter_exhausted` 说明任务大到连拆都拆不动。查 events 的 `task_split` 链看是哪个 task 反复爆，人工拆解或换更小 goal。详见 [docs/dead-letter-design.md](../docs/dead-letter-design.md) §8。
+- **死信队列在拆分中**：`--status` 见 `dead_letter.queue_len > 0` 属正常（正在 `splitTask` 拆子项回插）。关注 `dlq_split_count` 接近 30 或 `failed_count` 涨——接近上限就是兜底将至的前兆，判定见 [observability.md](../docs/observability.md) §5。
 
 ## 可观测性
 
