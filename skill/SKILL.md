@@ -48,7 +48,7 @@ bash <skill目录>/run.sh --cwd <项目> --resume          # 恢复运行（删 
 
 ## 发战报
 
-起定时任务读上述文件，按你的判断组织战报。推荐用 `bash "$RUN" --cwd <项目> --status --json` —— 跨平台零依赖、把 state.json + .task.md + events 末尾 + watch 进程汇总成单一 JSON（字段结构见 [observability.md §4.2](../docs/observability.md)）。⚠️ 解析数字字段时若跑在带 `FORCE_COLOR` 的环境，用 `env -u FORCE_COLOR` 或读 `JSON.parse` 后取值，别比较原始 stdout（node 会给数字加 ANSI 色污染断言）。参考格式（非强制）：
+起定时任务读上述文件，按你的判断组织战报。推荐用 `bash <skill目录>/run.sh --cwd <项目> --status --json` —— 跨平台零依赖、把 state.json + .task.md + events 末尾 + watch 进程汇总成单一 JSON（字段结构见 [observability.md §4.2](../docs/observability.md)）。⚠️ 解析数字字段时若跑在带 `FORCE_COLOR` 的环境，用 `env -u FORCE_COLOR` 或读 `JSON.parse` 后取值，别比较原始 stdout（node 会给数字加 ANSI 色污染断言）。参考格式（非强制）：
 
 ```
 📊 swallow 战报 20:38

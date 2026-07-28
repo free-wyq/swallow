@@ -6,7 +6,7 @@ flowchart TB
     Hermes([🤖 Hermes])
 
     subgraph run["① 任务执行"]
-      Watch["🛠️ swallow --watch 自驱"]
+      Watch["🛠️ run.sh --watch 自驱"]
     end
 
     Disk[("📁 落盘结果<br/>state.json · events.jsonl · .task.md")]
@@ -48,7 +48,7 @@ flowchart TB
 
 > 在 `<项目>` 跑 swallow，目标「把缺陷表里失败的项全修了」。
 
-swallow --watch 自驱：自己拆任务 → 逐个推进 → 每轮 commit。崩了能从 state.json 续跑（不丢进度、不重复打勾）。运行日志自动写进 `<项目>/night_run.log`（swallow 自己写，不用 tee）。
+run.sh --watch 自驱：自己拆任务 → 逐个推进 → 每轮 commit。崩了能从 state.json 续跑（不丢进度、不重复打勾）。运行日志自动写进 `<项目>/night_run.log`（swallow 自己写，不用 tee）。
 
 拉起/守护 swallow 是你（或让 Hermes 帮你配 systemd `Restart=always`）的事，**不是 Hermes 战报的职责**——定时战报只读结果、不干预推进。
 
@@ -63,7 +63,7 @@ swallow 把结果结构化落盘（`state.json` 恢复点 / `events.jsonl` 审�
 把这段发给 Hermes（它自己会建成定时任务、投递到企业微信）：
 
 ```
-建一个每 5 分钟的企业微信定时任务，读 `<项目>` 的 night_run.log 最后 15 行、swallow --status 输出、.task.md 任务列表，按下面格式汇总一条中文消息发出来：
+建一个每 5 分钟的企业微信定时任务，读 `<项目>` 的 night_run.log 最后 15 行、bash <skill目录>/run.sh --status 输出、.task.md 任务列表，按下面格式汇总一条中文消息发出来：
 
 📊 swallow 战报 [当前时间]
 
@@ -116,7 +116,7 @@ swallow 把结果结构化落盘（`state.json` 恢复点 / `events.jsonl` 审�
 
 ## 解耦关系
 
-- **任务执行（swallow --watch）** 自驱推进，崩了 state.json 续跑（不丢进度、不重复打勾）。拉起/守护是用户或 systemd 的事，不是 Hermes 的。
+- **任务执行（run.sh --watch）** 自驱推进，崩了 state.json 续跑（不丢进度、不重复打勾）。拉起/守护是用户或 systemd 的事，不是 Hermes 的。
 - **定时战报（Hermes）** 只定时读结果组织战报、推企业微信。不拉起、不守护 swallow。
 
 swallow 崩了 → Hermes 战报照样发、告诉你它挂了（状态停滞 / 心跳超时）；Hermes 挂了 → swallow 继续推进；企业微信挂了 → 两者都不受影响。

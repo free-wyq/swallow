@@ -37,7 +37,7 @@ flowchart TB
 
     subgraph PROJ["📁 目标项目（--cwd 指向）· 产物写入处 + git commit 仓库"]
       direction TB
-      KNOW[("CLAUDE.md / .claude/memory<br/>已有知识")]
+      KNOW[("CLAUDE.md 基线<br/>+ .claude/memory 引擎注入")]
       TASK[(".task.md · 进度真相源")]
       STATE[("state.json · 恢复点<br/>原子写")]
       EVENTS[("events.jsonl<br/>append-only 审计")]
@@ -71,7 +71,7 @@ flowchart TB
     end
 
     User -->|"拉起"| BOOT
-    KNOW -->|"loadProjectKnowledge 喂基线"| BOOT
+    KNOW -->|"loadProjectKnowledge 读 CLAUDE.md 喂基线（.claude/memory 由引擎 query 注入，swallow 不喂）"| BOOT
     ENV -.->|"密钥/代理/模型"| BOOT
     BOOT -->|"写出"| TASK
     ENV -.->|"密钥/模型"| RUN
@@ -115,7 +115,7 @@ Swallow 架构围绕三项原则展开：
 ```mermaid
 flowchart LR
     subgraph BOOT["bootstrap"]
-        A[读取 CLAUDE.md / .claude/memory] --> B[拆解任务]
+        A[读取 CLAUDE.md（代码喂基线）/ .claude/memory（引擎注入）] --> B[拆解任务]
         B --> C[写入 .task.md]
     end
 
@@ -218,10 +218,10 @@ flowchart LR
 
 ```bash
 # 1. 启动
-swallow --cwd /tmp/demo "初始化一个 Node.js CLI 工具"
+bash <skill目录>/run.sh --cwd /tmp/demo "初始化一个 Node.js CLI 工具"
 
 # 2. 看状态
-swallow --cwd /tmp/demo --status
+bash <skill目录>/run.sh --cwd /tmp/demo --status
 
 # 3. 看审计日志
 tail -3 /tmp/demo/events.jsonl
@@ -320,7 +320,7 @@ flowchart LR
 | 探索性设计 | **不推荐**：需要开发者持续决策与反馈 |
 | 高风险重构 | **谨慎使用**：建议先在非关键分支验证 |
 
-建议：使用前确保项目中存在 `CLAUDE.md` 和 `.claude/memory/` 知识沉淀，这两者直接影响任务拆解的准确性和效率。
+建议：使用前确保项目中存在 `CLAUDE.md`（swallow 代码直接读它当 bootstrap 基线）和 `.claude/memory/`（引擎 auto-memory 注入，跨会话记忆）知识沉淀，这两者直接影响任务拆解的准确性和效率。
 
 ### 3.3 预设问答
 

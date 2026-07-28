@@ -6,13 +6,13 @@ flowchart TB
     CC([🤖 Claude Code])
 
     subgraph run["① 任务执行（会话内，对话式）"]
-      Watch["🛠️ swallow --watch 自驱"]
+      Watch["🛠️ run.sh --watch 自驱"]
     end
 
     Disk[("📁 落盘结果<br/>state.json · events.jsonl · .task.md")]
 
     subgraph peek["② 临时看一眼（会话内，对话式）"]
-      Status["📊 swallow --status"]
+      Status["📊 run.sh --status"]
     end
 
     You -->|"「跑 swallow」"| CC
@@ -78,7 +78,7 @@ Claude Code 是**会话内交互工具**，不是常驻调度器。swallow 体�
 
 | 事 | 归谁 | 为什么不归 Claude Code |
 |---|---|---|
-| 任务推进 | swallow `--watch` 自驱 | 进程内 tick 循环，不靠外部触发 |
+| 任务推进 | `run.sh --watch` 自驱 | 进程内 tick 循环，不靠外部触发 |
 | **定时战报** | **OS crontab + bash 脚本**，或 **Hermes** | Claude Code 没有常驻进程，`/loop` 之类会话内定时在终端一关就死，到不了 24h |
 | 守护/自动拉起 | systemd `Restart=always` | 同上，OS 层的事 |
 
@@ -86,7 +86,7 @@ Claude Code 是**会话内交互工具**，不是常驻调度器。swallow 体�
 
 ## 解耦关系
 
-- **任务执行**（swallow `--watch`）自驱推进，崩了 state.json 续跑。拉起是 Claude Code 帮你一次、之后 swallow 自管。
+- **任务执行**（`run.sh --watch`）自驱推进，崩了 state.json 续跑。拉起是 Claude Code 帮你一次、之后 swallow 自管。
 - **状态查看**（Claude Code）只在你问时跑一次 `--status`，不守护 swallow、不发定时战报。
 
 swallow 崩了 → Claude Code 会话照样能开、跑 `--status` 告诉你它挂了（状态停滞 / 心跳超时）；Claude Code 会话关了 → swallow 继续推进；战报通道挂了 → 两者都不受影响。

@@ -225,7 +225,7 @@
                 <span><i class="fa-solid fa-book-bookmark text-purple-400 mr-1"></i> CLAUDE.md / 记忆</span>
                 <span class="text-[9px] bg-purple-950 text-purple-300 border border-purple-800 px-1 rounded">Knowledge</span>
               </div>
-              <p class="text-[10px] text-slate-400 mt-0.5">CLAUDE.md 项目基线 + .claude/memory 跨会话记忆</p>
+              <p class="text-[10px] text-slate-400 mt-0.5">CLAUDE.md 项目基线 + .claude/memory 引擎注入</p>
             </div>
 
             <!-- TASK -->
@@ -452,7 +452,7 @@
     // Connection SVG coordinates mapped by node pair
     const connectionPairs = [
       { from: 'User', to: 'BOOT', label: '拉起' },
-      { from: 'KNOW', to: 'BOOT', label: 'loadProjectKnowledge' },
+      { from: 'KNOW', to: 'BOOT', label: 'loadProjectKnowledge 读 CLAUDE.md（memory 引擎注入）' },
       { from: 'ENV', to: 'BOOT', label: '密钥/代理' },
       { from: 'BOOT', to: 'TASK', label: '写出 .task.md' },
       { from: 'BOOT', to: 'TICK', label: '进入循环' },
@@ -480,7 +480,7 @@
         id: 'boot_init',
         activeNodes: ['User', 'BOOT', 'ENV', 'KNOW'],
         activeConns: ['User->BOOT', 'KNOW->BOOT', 'ENV->BOOT'],
-        desc: "<b>[BOOT Stage]</b> 用户或外部 Agent 拉起 <code class='text-amber-300'>--watch</code> 长进程。系统首先读取 <code class='text-amber-300'>swallow.env</code> (密钥与代理) 并调用 <code class='text-purple-300'>loadProjectKnowledge</code> 读取 CLAUDE.md 项目基线与 <code class='text-purple-300'>.claude/memory</code> 跨会话记忆。",
+        desc: "<b>[BOOT Stage]</b> 用户或外部 Agent 拉起 <code class='text-amber-300'>--watch</code> 长进程。系统首先读取 <code class='text-amber-300'>swallow.env</code> (密钥与代理) 并调用 <code class='text-purple-300'>loadProjectKnowledge</code> 读取 CLAUDE.md 项目基线。<code class='text-purple-300'>.claude/memory</code> 跨会话记忆由引擎 <code class='text-purple-300'>query()</code> 自动注入（system-reminder），swallow 不显式喂——避免重复占上下文。",
         action: () => {
           stateJson.status = "BOOTSTRAPPING";
           addEvent("BOOTSTRAP_START", "Loading environment and project baseline knowledge");

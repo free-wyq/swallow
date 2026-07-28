@@ -37,7 +37,7 @@ flowchart TB
 
     subgraph PROJ["📁 目标项目（--cwd 指向）· 产物写入处 + git commit 仓库"]
       direction TB
-      KNOW[("CLAUDE.md / .claude/memory<br/>已有知识")]
+      KNOW[("CLAUDE.md 基线<br/>+ .claude/memory 引擎注入")]
       TASK[(".task.md · 进度真相源")]
       STATE[("state.json · 恢复点<br/>原子写")]
       EVENTS[("events.jsonl<br/>append-only 审计")]
@@ -71,7 +71,7 @@ flowchart TB
     end
 
     User -->|"拉起"| BOOT
-    KNOW -->|"loadProjectKnowledge 喂基线"| BOOT
+    KNOW -->|"loadProjectKnowledge 读 CLAUDE.md 喂基线（.claude/memory 由引擎 query 注入，swallow 不喂）"| BOOT
     ENV -.->|"密钥/代理/模型"| BOOT
     BOOT -->|"写出"| TASK
     ENV -.->|"密钥/模型"| RUN
@@ -161,17 +161,17 @@ cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥�
 
 ## 命令一览
 
-入口是 skill 目录里的 `run.sh`（agent 注册 skill 后直接调）。下表用 `$RUN` 代指它（如 `~/.claude/skills/swallow-scheduler/run.sh`）：
+入口是 skill 目录里的 `run.sh`（agent 注册 skill 后直接调）。下表 `<skill目录>` 代指你注册本 skill 的目录（如 `~/.claude/skills/swallow-scheduler`）：
 
 | 命令 | 作用 |
 |---|---|
-| `bash $RUN --cwd <proj> "目标"` | 裸跑 = `--watch`，自驱跑到完成 |
-| `bash $RUN --cwd <proj> --watch "目标"` | 显式自驱（bootstrap + `while(tick)`） |
-| `bash $RUN --cwd <proj> --status` | 实时状态（多行，给人看） |
-| `bash $RUN --cwd <proj> --status --json` | 结构化 JSON（给程序读，跨平台零依赖） |
-| `bash $RUN --cwd <proj> --report` | 运行报告 |
-| `bash $RUN --cwd <proj> --stop` | 停（写 `.stop` 哨兵 + 杀 `--watch`） |
-| `bash $RUN --cwd <proj> --resume` | 恢复运行（删 `.stop` 哨兵，watch 没在跑则从 state.json 拉起） |
+| `bash <skill目录>/run.sh --cwd <proj> "目标"` | 裸跑 = `--watch`，自驱跑到完成 |
+| `bash <skill目录>/run.sh --cwd <proj> --watch "目标"` | 显式自驱（bootstrap + `while(tick)`） |
+| `bash <skill目录>/run.sh --cwd <proj> --status` | 实时状态（多行，给人看） |
+| `bash <skill目录>/run.sh --cwd <proj> --status --json` | 结构化 JSON（给程序读，跨平台零依赖） |
+| `bash <skill目录>/run.sh --cwd <proj> --report` | 运行报告 |
+| `bash <skill目录>/run.sh --cwd <proj> --stop` | 停（写 `.stop` 哨兵 + 杀 `--watch`） |
+| `bash <skill目录>/run.sh --cwd <proj> --resume` | 恢复运行（删 `.stop` 哨兵，watch 没在跑则从 state.json 拉起） |
 
 `--cwd` 决定三件事，三者统一：① 产物写入处 ② `git commit` 的仓库 ③ 会话工作目录。不传则回退 `SWALLOW_PROJECT` 环境变量或当前目录。**别在 swallow 仓库根目录裸跑**——会把产物写进 swallow 仓库并 commit 它。
 
@@ -240,13 +240,9 @@ bash <skill目录>/run.sh --cwd /path/to/project "构建一个 Go REST API"
 
 旧设计让 LLM 自己 agentic 探索项目拿上下文 → 要么探索过度爆上下文（Claude Code 拆得准但爆）、要么没上下文纯猜（Hermes 拆得不准）。根因是「谁拿项目上下文」绑在 LLM 身上。
 
-改法：**把最高价值的现成知识由 orchestrator 代码直接读出来喂进 prompt 当基线，模型拿这些做底，剩余按需自己探索——不限制死，只把它从「无脑全扫」掰向「已知为基、按需补」。** 基线优先级：
+改法：**把最高价值的现成知识由 orchestrator 代码直接读出来喂进 prompt 当基线，模型拿这些做底，剩余按需自己探索——不限制死，只把它从「无脑全扫」掰向「已知为基、按需补」。** 基线由代码显式喂的只有 `CLAUDE.md`（项目说明书，密度最高）；项目记忆（`.claude/memory/*.md`）由**引擎 `query()` 自动注入**（system-reminder 形式，和 CLI 同份），swallow 不显式喂——避免重复占上下文，worker 自然能看到。退路：CLAUDE.md 不存在时代码轻量勘察目录树（限深 3 层 + manifest，跳依赖/构建产物大目录、保留隐藏文件）当探索起点，总长截断 20k。
 
-1. `CLAUDE.md`（claude code 沉淀的项目说明书，密度最高）
-2. `.claude/memory/*.md` 累积记忆（架构/约定/模块边界，喂进 bootstrap 当基线）
-3. 退路：都没有时代码轻量勘察目录树（限深 3 层 + manifest，跳依赖/构建产物大目录、保留隐藏文件）当探索起点，总长截断 20k
-
-**不锁死文件工具**：CLAUDE.md/memory 当基线喂进来，剩下细节模型按需 Read/Grep——无脑全扫才爆上下文，按需探索不会。旧工程复用已有知识、不重扫；真新工程走退路给个地图当起点。Hermes 以前不准就是没上下文，现在基线喂进去了，谁拆都准。
+**不锁死文件工具**：CLAUDE.md 当基线喂进来（memory 引擎注入），剩下细节模型按需 Read/Grep——无脑全扫才爆上下文，按需探索不会。旧工程复用已有知识、不重扫；真新工程走退路给个地图当起点。Hermes 以前不准就是没上下文，现在基线喂进去了，谁拆都准。
 
 ⚠️ GLM 等代理模型上下文有限（运行时由 orchestrator 经 `getContextUsage` 实测，不写死）。worker prompt 已加节流铁律：只读与当前任务相关的文件、复用 `.claude/memory/` 已有背景、大文件 Grep 定位再按行 Read。目标项目可放 `.claudeignore` 进一步压扫描范围。orchestrator 这层另加 ctx 健康度探针：上轮 token 占比超阈值先发 `/compact deep` 压一轮，压不下来再弃旧会话开新会话。
 
