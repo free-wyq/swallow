@@ -1112,6 +1112,15 @@ async function tick(): Promise<TickOutcome> {
 // 终止类 outcome（done/already_terminated/stopped）break；
 // already_running 退避 30s；其余退避 5s。
 async function watch(goal: string) {
+  // 守卫：已有 --watch 在跑就立即退出，不覆写 PID_FILE、不进 while 空转（每 30s 重试锁烧资源）。
+  // flock（tick 级）已保证数据安全，此 PID 守卫是「快速失败」的软协调——对齐 README「第二个立即退出」。
+  // TOCTOU（check 与 write 间另一进程介入）窗口极小，且 flock 兜底 tick 级互斥，可接受（PID 文件协调的固有限制，与 systemd 同理）。
+  const wr = watchRunning();
+  if (wr.running) {
+    log(`已有 --watch 进程在跑（PID=${wr.pid}），本进程立即退出（不覆写 .pid、不空转）`);
+    appendEvent("watch_already_running", { existing_pid: wr.pid });
+    return;
+  }
   writeFileSync(PID_FILE, String(process.pid));
   try {
     log(`orchestrator --watch 启动，PID=${process.pid}`);
