@@ -23,16 +23,16 @@ swallow 自驱推进开发任务、把结果结构化落盘，**不发战报、�
 `run.sh` 是本 skill 的**唯一执行入口**——注册即用，直接调它（自定位 + 透传所有参数给 `orchestrator.ts`）。推进靠 `--watch` 长进程，崩了重启续跑（从 `state.json` 恢复点继续，不丢进度、不重复打勾）。
 
 ```bash
-# RUN 指向本 skill 目录里的 run.sh（注册后即在此目录）
-bash "$RUN" --cwd <项目> "目标"            # 拉起推进（--watch 自驱）
-bash "$RUN" --cwd <项目> --status          # 实时状态（人看）
-bash "$RUN" --cwd <项目> --status --json   # 结构化 JSON（程序读，跨平台零依赖）
-bash "$RUN" --cwd <项目> --report          # 运行报告
-bash "$RUN" --cwd <项目> --stop            # 临时停（写 .stop 哨兵 + 杀 watch）
-bash "$RUN" --cwd <项目> --resume          # 恢复运行（删 .stop 哨兵 + 若 watch 没在跑则从 state.json 拉起）
+# <skill目录> = 你注册本 skill 的目录（如 ~/.claude/skills/swallow-scheduler）
+bash <skill目录>/run.sh --cwd <项目> "目标"            # 拉起推进（--watch 自驱）
+bash <skill目录>/run.sh --cwd <项目> --status          # 实时状态（人看）
+bash <skill目录>/run.sh --cwd <项目> --status --json   # 结构化 JSON（程序读，跨平台零依赖）
+bash <skill目录>/run.sh --cwd <项目> --report          # 运行报告
+bash <skill目录>/run.sh --cwd <项目> --stop            # 临时停（写 .stop 哨兵 + 杀 watch）
+bash <skill目录>/run.sh --cwd <项目> --resume          # 恢复运行（删 .stop 哨兵 + 若 watch 没在跑则从 state.json 拉起）
 ```
 
-> `$RUN` = 你注册本 skill 的目录里的 `run.sh` 绝对路径（例如 `~/.claude/skills/swallow-scheduler/run.sh`）。`run.sh` 靠 `BASH_SOURCE` 自定位，无论从哪调都能找到同目录的 `orchestrator.ts` 和 `package.json`。
+> `run.sh` 靠 `BASH_SOURCE` 自定位，无论从哪调都能找到同目录的 `orchestrator.ts` 和 `package.json`，不必 cd 进 skill 目录。
 
 ⚠️ 目标项目绝不能是 swallow 仓库自身——会污染 git 历史。
 ⚠️ 停 swallow 用 `--stop`，别 `kill -9` watch 父进程——`--stop` 发 SIGTERM 会联动终止 claude 子进程后干净退出；`kill -9` 会让 claude 子进程变孤儿继续烧 token。`--resume` 恢复运行：删 `.stop` 哨兵，watch 没在跑时自动从 `state.json` 拉起（goal 从 state.json 读，无需再传）。
