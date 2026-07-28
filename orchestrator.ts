@@ -841,10 +841,12 @@ async function tick(): Promise<TickOutcome> {
     // 步骤6: 终止判定 A: remaining=0
     if (remaining === 0) {
       const blocked = countBlocked();
-      // 防假完成守卫：有阻塞标记或全程零 commit → suspected_false_completion（不设 last_termination，待人工介入）
-      // 没 git 时不走 commit 检查（gitCommitIfChanged 永远返回 false，had_any_commit 恒假；PostToolUse 钩子已兜底单 tick 假完成）
-      if (blocked > 0 || (existsSync(".git") && !state.had_any_commit)) {
-        log(`⚠️ remaining=0 但 ${blocked > 0 ? `${blocked} 个 [~] 阻塞` : "全程零 commit"}：疑假完成，挂起待人工核实（不设 last_termination）`);
+      // 防假完成守卫：仅看是否有 [~] 阻塞标记（BLOCKED/stall 产生）→ suspected_false_completion
+      // 放掉「全程零 commit」条件：完全信模型完成判定后，纯校验类/只读类 goal 天生零 commit，
+      // 用零 commit 作假完成信号会误挂这类 goal。完成判定改由每轮 OUTCOME 标记 + 依据留痕兜底。
+      // （had_any_commit 字段保留——gitCommitIfChanged 仍写它，只是收尾不再读它作判据。）
+      if (blocked > 0) {
+        log(`⚠️ remaining=0 但 ${blocked} 个 [~] 阻塞：疑假完成，挂起待人工核实（不设 last_termination）`);
         appendEvent("suspected_false_completion", { blocked, had_any_commit: state.had_any_commit, total }, { tick_id: tickId, loop_count: state.loop_count });
         state.status = "blocked_suspect";
         state.last_tick_at = now();
@@ -1027,7 +1029,7 @@ async function tick(): Promise<TickOutcome> {
     // 步骤15: 结局标记 × 写文件 对照分流（取代旧「只看 wroteFiles」单信号）
     // Claude 末尾输出 OUTCOME:COMPLETED/ALREADY_DONE/BLOCKED（约定见 buildPrompt 末尾），swallow 解析后与客观写动作对照：
     //   - 写了代码 → 事实优先，commit+打勾（不管 Claude 自报什么）
-    //   - ALREADY_DONE + 没写 → 软阻塞 [~] 等人工核（不静默放行，保留偏假阴性）
+    //   - ALREADY_DONE + 没写 → 打勾推进（校验类跑通即完成 / 只读类检查后确认；依据存事件 evidence 事后追溯）
     //   - BLOCKED + 没写 → 直接 [~] 跳过（不等 stall 烧 3 轮）
     //   - 其余没写（COMPLETED-没动手可疑 / 未声明）→ stall
     const m = finalText.match(/OUTCOME:(COMPLETED|ALREADY_DONE|BLOCKED)/);
@@ -1045,10 +1047,13 @@ async function tick(): Promise<TickOutcome> {
       state.session_retries = 0;
       appendEvent("task_completed", { task: taskKey, wrote_files: wroteFiles, committed, outcome: outcomeTag }, { tick_id: tickId, loop_count: state.loop_count });
     } else if (outcomeTag === "ALREADY_DONE") {
-      // 判已完成 + 没写代码 → 软阻塞 [~] 等人工核（不 commit 不打勾，不静默放行；had_any_commit 仍假 → 收尾 suspected_false_completion 兜底）
-      blockFirst();
-      log(`🔖 任务判已完成（未写代码），标 [~] 软阻塞等人工核: ${taskKey}`);
-      appendEvent("task_already_done", { task: taskKey, evidence: finalText.slice(0, 500), outcome: outcomeTag }, { tick_id: tickId, loop_count: state.loop_count });
+      // 判已完成（未写代码，如校验类任务跑通即完成 / 只读类检查后确认）→ 打勾 [x] 推进
+      // 依据存进事件 evidence 事后可追溯（完全信模型完成判定 + 留痕）
+      tickFirst();
+      const committed = gitCommitIfChanged(taskLine);   // 校验/只读类无改动 → false，无 commit
+      if (committed) state.had_any_commit = true;
+      log(`✅ 任务判已完成（未写代码），打勾: ${taskKey}`);
+      appendEvent("task_already_done", { task: taskKey, evidence: finalText.slice(0, 500), outcome: outcomeTag, via: "self_reported" }, { tick_id: tickId, loop_count: state.loop_count });
       state.stall_task = null;
       state.stall_count = 0;
       state.session_retries = 0;
@@ -1503,6 +1508,7 @@ function showReport() {
   // 从 events.jsonl 统计
   console.log("\n--- 事件统计（events.jsonl）---");
   console.log(`  task_completed: ${countEvents("task_completed")}`);
+  console.log(`  task_already_done: ${countEvents("task_already_done")}（自报完成·依据留痕）`);
   console.log(`  task_blocked: ${countEvents("task_blocked")}`);
   console.log(`  task_stall: ${countEvents("task_stall")}`);
   console.log(`  session_dropped: ${countEvents("session_dropped")}`);
