@@ -18,11 +18,9 @@ swallow 自驱推进开发任务、把结果结构化落盘，**不发战报、�
 - 禁止编辑 `.task.md`。
 - 禁止自己拆任务——无论从哪里抠任务都不行。
 
-推进靠 `--watch` 长进程，崩了重启续跑（重启后从 `state.json` 恢复点继续，不丢进度、不重复打勾）。skill 自带脚本（`orchestrator.ts` + `run.sh`），**注册即用**——直接跑本 skill 目录里的 `run.sh`，不依赖 PATH；首次运行自动把依赖懒加载到 `~/.local/share/swallow/deps`（共享缓存，幂等跳过）。
-
 ## 用法
 
-`run.sh` 是本 skill 的**唯一执行入口**——直接调它，不用敲 `swallow`（那个 PATH 命令是给人方便的，agent 不靠它）。`run.sh` 会自定位 + 懒加载依赖 + 透传所有参数给 `orchestrator.ts`。
+`run.sh` 是本 skill 的**唯一执行入口**——注册即用，直接调它（自定位 + 透传所有参数给 `orchestrator.ts`）。推进靠 `--watch` 长进程，崩了重启续跑（从 `state.json` 恢复点继续，不丢进度、不重复打勾）。
 
 ```bash
 # RUN 指向本 skill 目录里的 run.sh（注册后即在此目录）

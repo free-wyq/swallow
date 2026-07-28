@@ -12,7 +12,7 @@ git clone --depth 1 https://github.com/free-wyq/swallow.git ~/.local/share/swall
 
 ## 2. 注册 skill（你调度 swallow 的入口）
 
-skill（`~/.local/share/swallow/skill/`，含 `SKILL.md` + 自带脚本 `orchestrator.ts`/`run.sh`）是你跑 swallow / 读状态 / 发战报的入口。**注册进你自己的 skills 目录即用**——直接调 skill 目录的 `run.sh`，不依赖 PATH 命令、无需预装依赖。
+skill（`~/.local/share/swallow/skill/`，含 `SKILL.md` + 自带脚本 `orchestrator.ts`/`run.sh`）是你跑 swallow / 读状态 / 发战报的入口。**注册进你自己的 skills 目录即用**——直接调 skill 目录的 `run.sh`，无需预装依赖。
 
 1. 推理你自己的 skills 目录（查你自己的文档/约定，不确定就问用户）。
 2. 把源目录 `~/.local/share/swallow/skill` **拷成真目录**（`cp -r`，不要 symlink——多数 agent 的 skill 扫描器用 find/glob 遍历、默认不跟符号链接进子目录，symlink 进去的 skill 你看不见）。
@@ -39,7 +39,7 @@ chmod 600 ~/.config/swallow/swallow.env   # 密钥别让别的用户读到
 ## 4. 会跑
 
 ```bash
-# 你直接调 skill 里的 run.sh（注册即用，不依赖 PATH）：
+# 你直接调 skill 里的 run.sh（注册即用）：
 bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/your/project "你的开发目标"   # --watch 自驱跑到底
 bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/your/project --status          # 实时状态（人看）
 bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/your/project --status --json   # 结构化 JSON（程序读）

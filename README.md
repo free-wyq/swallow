@@ -19,7 +19,7 @@ swallow 是纯 agent 化的——没有安装脚本，由 agent（或你按指�
 https://raw.githubusercontent.com/free-wyq/swallow/main/install.md
 ```
 
-装到中立路径 `~/.local/share/swallow`（代码树）+ `~/.config/swallow/swallow.env`（密钥），不碰任何 agent 私有目录。装完 agent 直接 `bash <skill目录>/run.sh --cwd <项目> "目标"` 即用——不依赖 PATH 命令。卸载见 [install.md](install.md) 末节。
+装到中立路径 `~/.local/share/swallow`（代码树）+ `~/.config/swallow/swallow.env`（密钥），不碰任何 agent 私有目录。装完 agent 直接 `bash <skill目录>/run.sh --cwd <项目> "目标"` 即用。卸载见 [install.md](install.md) 末节。
 
 ---
 
@@ -143,7 +143,7 @@ mkdir -p ~/.config/swallow
 cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow/swallow.env
 chmod 600 ~/.config/swallow/swallow.env   # 编辑填 ANTHROPIC_API_KEY=sk-...（走代理再加 ANTHROPIC_BASE_URL/ANTHROPIC_MODEL）
 
-# 3. 跑——直接调 skill 里的 run.sh（注册即用，不依赖 PATH；产物写在 --cwd 指定的项目目录）
+# 3. 跑——直接调 skill 里的 run.sh（注册即用；产物写在 --cwd 指定的项目目录）
 bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/project "构建一个 Go REST API"
 ```
 
@@ -161,7 +161,7 @@ cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥�
 
 ## 命令一览
 
-入口是 skill 目录里的 `run.sh`（agent 注册 skill 后直接调，不依赖 PATH）。下表用 `$RUN` 代指它（如 `~/.claude/skills/swallow-scheduler/run.sh`）：
+入口是 skill 目录里的 `run.sh`（agent 注册 skill 后直接调）。下表用 `$RUN` 代指它（如 `~/.claude/skills/swallow-scheduler/run.sh`）：
 
 | 命令 | 作用 |
 |---|---|
@@ -186,7 +186,7 @@ cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥�
 三者解耦：推进靠 `--watch` 自管，结果可靠落盘，战报由外部 agent 读结果自行组织。watch 挂了不影响外部 agent 读已落盘的结果发战报；外部 agent 挂了不影响 watch 推进。
 
 ```bash
-# 推进（一次）—— agent 注册 skill 后直接调 skill 目录里的 run.sh（注册即用，不依赖 PATH）
+# 推进（一次）—— agent 注册 skill 后直接调 skill 目录里的 run.sh（注册即用）
 bash <skill目录>/run.sh --cwd /path/to/project "构建一个 Go REST API"
 
 # 外部 agent 定时读结果发战报（由该 agent 的定时机制实现，读结构化文件即可）
