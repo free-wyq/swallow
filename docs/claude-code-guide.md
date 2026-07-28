@@ -45,7 +45,7 @@ Claude Code 在 swallow 体系里只干两件事：**任务执行**（拉起 swa
 
 > 在 `<项目>` 跑 swallow，目标「把缺陷表里失败的项全修了」，后台跑。
 
-Claude Code 用 Bash 工具拉起 `swallow --cwd <项目> "目标"`。swallow `--watch` 自驱：自己拆任务 → 逐个推进 → 每轮 commit。崩了能从 state.json 续跑（不丢进度、不重复打勾）。
+Claude Code 用 Bash 工具拉起 `bash <skill目录>/run.sh --cwd <项目> "目标"`。swallow `--watch` 自驱：自己拆任务 → 逐个推进 → 每轮 commit。崩了能从 state.json 续跑（不丢进度、不重复打勾）。
 
 拉起后 swallow 是**独立后台进程**，跟 Claude Code 会话生死无关——你关终端、关 Claude Code，swallow 照样推进；想让它崩了也能自动拉起，让 Claude Code 帮你配 systemd `Restart=always`。守护是 OS 层的事，不是 Claude Code 的职责。
 
@@ -57,7 +57,7 @@ Claude Code 用 Bash 工具拉起 `swallow --cwd <项目> "目标"`。swallow `-
 
 > 看下 swallow 现在啥状态。
 
-Claude Code 用 Bash 跑 `swallow --cwd <项目> --status`，把多行实时状态读出来给你：第几轮、idle/running/blocked、心跳时间、已完成/未完成/阻塞各几个、最近事件。需要更细的运行报告就说「出个运行报告」（`--report`）。
+Claude Code 用 Bash 跑 `bash <skill目录>/run.sh --cwd <项目> --status`，把多行实时状态读出来给你：第几轮、idle/running/blocked、心跳时间、已完成/未完成/阻塞各几个、最近事件。需要更细的运行报告就说「出个运行报告」（`--report`）。
 
 **这是即时检查，不是定时**——你问一次它看一次，不会自动反复看。要定时反复看（定时战报），见末尾「边界」。
 
@@ -69,7 +69,7 @@ Claude Code 用 Bash 跑 `swallow --cwd <项目> --status`，把多行实时状�
 
 ## 排查（都对 Claude Code 说）
 
-- **swallow 卡住没进展**：让 Claude Code 读 `state.json` 的 `last_heartbeat_at`，比当前时间老超过 60 分钟且 `status=running` → watch 卡死了（进程没崩但 query 挂死）。`swallow --cwd <项目> --stop` 干净停掉再重启（`--stop` 发 SIGTERM 会联动终止 claude 子进程，约 10s 干净退出无孤儿；别 `kill -9` 父进程，会让 claude 子进程变孤儿继续烧 token）。
+- **swallow 卡住没进展**：让 Claude Code 读 `state.json` 的 `last_heartbeat_at`，比当前时间老超过 60 分钟且 `status=running` → watch 卡死了（进程没崩但 query 挂死）。`bash <skill目录>/run.sh --cwd <项目> --stop` 干净停掉再重启（`--stop` 发 SIGTERM 会联动终止 claude 子进程，约 10s 干净退出无孤儿；别 `kill -9` 父进程，会让 claude 子进程变孤儿继续烧 token）。
 - **状态看着不对、想看原始事件流**：让 Claude Code `tail` 一下 `events.jsonl` 末尾几行，看 `tick_started` 有没有配对的 `tick_completed`（无配对 = 该 tick 崩了）。
 
 ## 边界：Claude Code 不干什么
@@ -82,7 +82,7 @@ Claude Code 是**会话内交互工具**，不是常驻调度器。swallow 体�
 | **定时战报** | **OS crontab + bash 脚本**，或 **Hermes** | Claude Code 没有常驻进程，`/loop` 之类会话内定时在终端一关就死，到不了 24h |
 | 守护/自动拉起 | systemd `Restart=always` | 同上，OS 层的事 |
 
-**定时战报的正道是 OS 层，不经 Claude Code**：一个轻量 bash 脚本（`swallow --status --json` 拿结构化数据 + `curl` 推企业微信 webhook）挂 `crontab`，每 5 分钟跑一次、几秒就退出——最轻最稳，不烧 token。`--status --json` 是 swallow 原生吐的 JSON，用任何能读 JSON 的工具（python/node/awk）解析即可，**不依赖 jq 这类非标配工具**。要战报能力见 [hermes-guide.md](hermes-guide.md)（Hermes 有原生常驻 cron），或自己写 bash + crontab。
+**定时战报的正道是 OS 层，不经 Claude Code**：一个轻量 bash 脚本（`bash <skill目录>/run.sh --status --json` 拿结构化数据 + `curl` 推企业微信 webhook）挂 `crontab`，每 5 分钟跑一次、几秒就退出——最轻最稳，不烧 token。`--status --json` 是 swallow 原生吐的 JSON，用任何能读 JSON 的工具（python/node/awk）解析即可，**不依赖 jq 这类非标配工具**。要战报能力见 [hermes-guide.md](hermes-guide.md)（Hermes 有原生常驻 cron），或自己写 bash + crontab。
 
 ## 解耦关系
 

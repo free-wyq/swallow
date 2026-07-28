@@ -11,27 +11,15 @@
 
 ## 安装
 
-两种入口，装的是同一个 `install.sh`——按你是人还是智能体挑一个：
+swallow 是纯 agent 化的——没有安装脚本，由 agent（或你按指令）git clone + 注册 skill 即用。完整步骤见 [install.md](install.md)（给 AI 助手读，它读完自行执行）。
 
-### 方式一 · `.sh`：一条命令（人 / 智能体直接执行）
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
-```
-
-### 方式二 · `.md`：给智能体读（它读完自行装）
-
-把这个地址发给你的 AI 助手：
+把这个地址发给你的 AI 助手，让它读这个文档、按步骤执行即可装好（克隆代码 → 注册进它的 skills 目录 → 配密钥）：
 
 ```
 https://raw.githubusercontent.com/free-wyq/swallow/main/install.md
 ```
 
-让它读这个文档、按文档执行上面的 bash 即可装好。适合让 agent 自主配置、或不想手动敲命令的场景。
-
----
-
-两种方式都装到中立路径（不碰任何 agent 私有目录），装完即用 `swallow --cwd <项目> "目标"`。卸载/重装/升级见 [install.md](install.md)。
+装到中立路径 `~/.local/share/swallow`（代码树）+ `~/.config/swallow/swallow.env`（密钥），不碰任何 agent 私有目录。装完 agent 直接 `bash <skill目录>/run.sh --cwd <项目> "目标"` 即用——不依赖 PATH 命令。卸载见 [install.md](install.md) 末节。
 
 ---
 
@@ -144,16 +132,19 @@ sequenceDiagram
 
 ## 快速开始
 
-```bash
-# 1. 一条命令安装（agent 无关，装到 ~/.local）
-curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
+给 AI 助手读的完整步骤见 [install.md](install.md)（克隆 → 注册 skill → 配密钥 → 跑）。核心三步：
 
-# 2. 配密钥（非交互调度器不 source ~/.bashrc，写进 swallow.env 才拿得到）
+```bash
+# 1. 克隆代码（agent 无关，装到 ~/.local/share/swallow）
+git clone --depth 1 https://github.com/free-wyq/swallow.git ~/.local/share/swallow
+
+# 2. 注册 skill：cp -r 代码树的 skill/ 进你的 skills 目录（拷真目录非 symlink，见 install.md），然后配密钥
+mkdir -p ~/.config/swallow
 cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow/swallow.env
 chmod 600 ~/.config/swallow/swallow.env   # 编辑填 ANTHROPIC_API_KEY=sk-...（走代理再加 ANTHROPIC_BASE_URL/ANTHROPIC_MODEL）
 
-# 3. 跑（产物写在 --cwd 指定的项目目录）
-swallow --cwd /path/to/project "构建一个 Go REST API"
+# 3. 跑——直接调 skill 里的 run.sh（注册即用，不依赖 PATH；产物写在 --cwd 指定的项目目录）
+bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/project "构建一个 Go REST API"
 ```
 
 ### 配置（密钥 / 代理 / 模型）
@@ -170,19 +161,19 @@ cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥�
 
 ## 命令一览
 
+入口是 skill 目录里的 `run.sh`（agent 注册 skill 后直接调，不依赖 PATH）。下表用 `$RUN` 代指它（如 `~/.claude/skills/swallow-scheduler/run.sh`）：
+
 | 命令 | 作用 |
 |---|---|
-| `swallow --cwd <proj> "目标"` | 裸跑 = `--watch`，自驱跑到完成 |
-| `swallow --cwd <proj> --watch "目标"` | 显式自驱（bootstrap + `while(tick)`） |
-| `swallow --cwd <proj> --status` | 实时状态（多行，给人看） |
-| `swallow --cwd <proj> --status --json` | 结构化 JSON（给程序读，跨平台零依赖） |
-| `swallow --cwd <proj> --report` | 运行报告 |
-| `swallow --cwd <proj> --stop` | 停（写 `.stop` 哨兵 + 杀 `--watch`） |
-| `swallow --cwd <proj> --resume` | 恢复运行（删 `.stop` 哨兵，watch 没在跑则从 state.json 拉起） |
+| `bash $RUN --cwd <proj> "目标"` | 裸跑 = `--watch`，自驱跑到完成 |
+| `bash $RUN --cwd <proj> --watch "目标"` | 显式自驱（bootstrap + `while(tick)`） |
+| `bash $RUN --cwd <proj> --status` | 实时状态（多行，给人看） |
+| `bash $RUN --cwd <proj> --status --json` | 结构化 JSON（给程序读，跨平台零依赖） |
+| `bash $RUN --cwd <proj> --report` | 运行报告 |
+| `bash $RUN --cwd <proj> --stop` | 停（写 `.stop` 哨兵 + 杀 `--watch`） |
+| `bash $RUN --cwd <proj> --resume` | 恢复运行（删 `.stop` 哨兵，watch 没在跑则从 state.json 拉起） |
 
 `--cwd` 决定三件事，三者统一：① 产物写入处 ② `git commit` 的仓库 ③ 会话工作目录。不传则回退 `SWALLOW_PROJECT` 环境变量或当前目录。**别在 swallow 仓库根目录裸跑**——会把产物写进 swallow 仓库并 commit 它。
-
-> 未装 `swallow` 命令、直接在 swallow 仓库内开发时，`swallow` 等价于 `npx tsx orchestrator.ts`。
 
 ---
 
@@ -195,8 +186,8 @@ cron / systemd / hermes cron 跑**干净 env 不 source `~/.bashrc`**，密钥�
 三者解耦：推进靠 `--watch` 自管，结果可靠落盘，战报由外部 agent 读结果自行组织。watch 挂了不影响外部 agent 读已落盘的结果发战报；外部 agent 挂了不影响 watch 推进。
 
 ```bash
-# 推进（一次）
-swallow --cwd /path/to/project "构建一个 Go REST API"
+# 推进（一次）—— agent 注册 skill 后直接调 skill 目录里的 run.sh（注册即用，不依赖 PATH）
+bash <skill目录>/run.sh --cwd /path/to/project "构建一个 Go REST API"
 
 # 外部 agent 定时读结果发战报（由该 agent 的定时机制实现，读结构化文件即可）
 #   cat /path/to/project/state.json

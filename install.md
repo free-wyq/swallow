@@ -1,20 +1,32 @@
 # swallow 安装（给 AI 助手读）
 
-> 这是给你的安装指令。读到这里就开始执行，按当前环境自行落地，不要反复问用户。三步：装好 → 注册 skill → 会跑。
+> 这是给你的安装指令。读到这里就开始执行，按当前环境自行落地，不要反复问用户。三步：克隆代码 → 注册 skill → 配密钥。
 
-## 1. 装好
+## 1. 克隆代码
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
+git clone --depth 1 https://github.com/free-wyq/swallow.git ~/.local/share/swallow
 ```
 
-装到中立路径（不碰任何 agent 私有目录）：代码 `~/.local/share/swallow`（git clone，含 `skill/`）、人用便利命令 `~/.local/bin/swallow`（→ `skill/run.sh`，agent 不靠它）、配置 `~/.config/swallow/swallow.env`。依赖首次跑时由 `skill/run.sh` 懒加载到 `~/.local/share/swallow/deps`（和代码树分离的共享缓存，幂等跳过）。已有同名文件自动备份成 `.bak`，不静默覆盖。不改 shell rc（PATH 不在 `~/.local/bin` 会提示加一行）。前提：Node 18+（脚本会检查，没有则提示）。
+克隆到中立路径 `~/.local/share/swallow`（不碰任何 agent 私有目录）。前提：Node 18+（跑 `node -v` 确认，没有就先装）。依赖（`node_modules` ~530MB）不在这里装——首次跑 `run.sh` 时懒加载到 `~/.local/share/swallow/deps`（共享缓存，幂等跳过）。
 
-### 配密钥
+## 2. 注册 skill（你调度 swallow 的入口）
+
+skill（`~/.local/share/swallow/skill/`，含 `SKILL.md` + 自带脚本 `orchestrator.ts`/`run.sh`）是你跑 swallow / 读状态 / 发战报的入口。**注册进你自己的 skills 目录即用**——直接调 skill 目录的 `run.sh`，不依赖 PATH 命令、无需预装依赖。
+
+1. 推理你自己的 skills 目录（查你自己的文档/约定，不确定就问用户）。
+2. 把源目录 `~/.local/share/swallow/skill` **拷成真目录**（`cp -r`，不要 symlink——多数 agent 的 skill 扫描器用 find/glob 遍历、默认不跟符号链接进子目录，symlink 进去的 skill 你看不见）。
+3. 目标名用 `swallow-scheduler`，已存在先删再拷（刷新）。
+4. 完成后 `find <你的skills目录>/swallow-scheduler -name SKILL.md` 验证能扫到（应返回一行）。
+
+swallow 升级后（`git -C ~/.local/share/swallow pull`）重做上面步骤刷新 skill 内容。
+
+## 3. 配密钥
 
 把密钥写进 `~/.config/swallow/swallow.env`（orchestrator 启动自动读进环境，已 export 的不覆盖）。**别塞 `~/.bashrc`**——cron / systemd / hermes cron 这类非交互调度器跑的是干净 env、不 source `~/.bashrc`，塞进去调度器根本拿不到，还常触发审批。
 
 ```bash
+mkdir -p ~/.config/swallow
 cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow/swallow.env
 chmod 600 ~/.config/swallow/swallow.env   # 密钥别让别的用户读到
 # 编辑 ~/.config/swallow/swallow.env，填 ANTHROPIC_API_KEY=sk-...
@@ -24,47 +36,28 @@ chmod 600 ~/.config/swallow/swallow.env   # 密钥别让别的用户读到
 
 不走代理只填 `ANTHROPIC_API_KEY`。想换配置路径：`export SWALLOW_ENV_FILE=/path/to/your.env`。
 
-## 2. 注册 skill（agent 调度 swallow 的入口）
-
-skill（`SKILL.md` + 自带脚本 `orchestrator.ts`/`run.sh`）告诉你怎么跑 swallow / 读状态 / 发战报。**用 swallow 前必须注册进你自己的 skills 目录。** 注册即用——agent 直接 `bash <skill目录>/run.sh`，不依赖 PATH 命令、无需预装依赖（首次运行 `run.sh` 自动懒加载到 `~/.local/share/swallow/deps`，共享缓存）。
-
-1. 推理你自己的 skills 目录（查你自己的文档/约定，不确定就问用户）。
-2. 把源目录 `~/.local/share/swallow/skill` **拷成真目录**（`cp -r`，不要 symlink——多数 agent 的 skill 扫描器用 find/glob 遍历、默认不跟符号链接进子目录，symlink 进去的 skill 你看不见）。
-3. 目标名用 `swallow-scheduler`，已存在先删再拷（刷新）。
-4. 完成后 `find <你的skills目录>/swallow-scheduler -name SKILL.md` 验证能扫到（应返回一行）。
-
-swallow 升级后重做上面步骤刷新 skill 内容。
-
-## 3. 会跑
+## 4. 会跑
 
 ```bash
-# agent 直接调 skill 里的 run.sh（注册即用，不依赖 PATH）：
+# 你直接调 skill 里的 run.sh（注册即用，不依赖 PATH）：
 bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/your/project "你的开发目标"   # --watch 自驱跑到底
 bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/your/project --status          # 实时状态（人看）
 bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/your/project --status --json   # 结构化 JSON（程序读）
 bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/your/project --report          # 运行报告
-
-# 人想敲短命令也行（install.sh 装的 PATH 便利 wrapper，指向同一个 run.sh）：
-swallow --cwd /path/to/your/project "你的开发目标"
 ```
 
 ⚠️ `--cwd` 指向你要开发的目标项目（orchestrator 往那写产物 + git commit），**别指向 swallow 仓库自身**。
 
-## 卸载 / 重装 / 升级
+## 卸载
 
 ```bash
-# 卸载（代码/命令/skill 拷贝全清，配置留 .bak 备份可恢复）
-curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash -s -- uninstall
-# 已装好可直接：bash ~/.local/share/swallow/install.sh uninstall
-
-# 重装（= 干净卸载 + 全新安装，解决代码树卡住 / 懒加载缓存脏）
-curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash -s -- reinstall
-
-# 升级（重跑安装命令即可，增量 git pull，保留本地改动与配置；依赖懒加载缓存不动）
-curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
+# 1. 删代码树 + 依赖缓存
+rm -rf ~/.local/share/swallow
+# 2. 删你 skills 目录里的 swallow-scheduler 拷贝
+rm -rf <你的skills目录>/swallow-scheduler
+# 3. 删配置（含密钥，先确认要不要留备份）
+rm -f ~/.config/swallow/swallow.env
 ```
-
-卸载时 `install.sh uninstall` 会顺带扫各已知 agent 目录（Claude Code / Codex / Gemini / Cursor / Codeium / Windsurf / Hermes）清掉 `swallow-scheduler`（symlink 或真目录拷贝都清）。你若不在这默认列表里，卸载前 `export SWALLOW_SKILL_DIRS=<你的skills-dir>:<skills-dir>` 再 uninstall，脚本会一并清理。
 
 ## 可选：你发战报
 

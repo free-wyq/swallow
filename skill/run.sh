@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # skill/run.sh —— swallow skill 自带入口：自定位 + 懒加载依赖 + exec 透传参数给 orchestrator.ts
 #
-# 这是 swallow 的唯一执行入口——agent 注册 skill 后直接跑本脚本，不依赖 PATH 里的 swallow 命令：
+# 这是 swallow 的唯一执行入口——agent 注册 skill 后直接跑本脚本：
 #   bash <skill目录>/run.sh --cwd <项目> "目标"
-# （人想敲短命令 swallow，install.sh 会装个 PATH wrapper 指向这里，但 agent 不靠它。）
 #
 # 设计：
 # - 自定位：无论从仓库跑还是从某 agent 的 skills/swallow-scheduler/ 跑都能定位自身（BASH_SOURCE）。

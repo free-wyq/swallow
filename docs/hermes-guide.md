@@ -83,13 +83,13 @@ swallow 把结果结构化落盘（`state.json` 恢复点 / `events.jsonl` 审�
 
 ⚠️ [异常标注：空转/阻塞/报错/崩溃才显示，无异常则不显示此行]
 
-要求：swallow 命令已配好 ~/.config/swallow/swallow.env，直接跑 swallow --status 即可，别 export 环境变量、别 source ~/.bashrc；启动时间从 night_run.log 第一行的 orchestrator 启动时间提取（swallow 自己写该日志）；心跳从 state.json 的 last_heartbeat_at 读；已完成的任务用「已完成」不用「已修复」；消息里每个字段单独一行、字段间空一行，简洁一目了然。
+要求：swallow skill 已注册（run.sh 已就位）、已配好 ~/.config/swallow/swallow.env，直接跑 `bash <skill目录>/run.sh --status` 即可，别 export 环境变量、别 source ~/.bashrc；启动时间从 night_run.log 第一行的 orchestrator 启动时间提取（swallow 自己写该日志）；心跳从 state.json 的 last_heartbeat_at 读；已完成的任务用「已完成」不用「已修复」；消息里每个字段单独一行、字段间空一行，简洁一目了然。
 ```
 
 ### 2.2 每日晨报
 
 > 建一个每天 9 点的企业微信定时任务，生成 `<项目>` 的晨报：
-> 1. 跑 swallow --status 获取状态
+> 1. 跑 `bash <skill目录>/run.sh --status` 获取状态
 > 2. 读 .task.md 统计任务完成情况（已完成 [x] / 未完成 [ ] / 阻塞 [~] / 总数）
 > 3. 读 night_run.log 末尾 50 行获取最近执行情况（swallow 自己写的运行日志）
 > 4. 读 state.json 的 loop_count、status、event_counts 字段
@@ -112,7 +112,7 @@ swallow 把结果结构化落盘（`state.json` 恢复点 / `events.jsonl` 审�
 ## 排查（都对 Hermes 说）
 
 - **战报不发了**：先问 Hermes「企业微信网关还活着吗」——`deliver=wecom` 靠网关投递，网关进程停了消息就静默丢，swallow 这边一切正常也收不到。
-- **战报突然全停、一条都不来**：多半是某次执行卡死把后续全排队了。问 Hermes「看下定时任务有没有卡住的执行，卡住的清掉，再手动触发一次战报」。修好那个卡住的 prompt（通常是战报 prompt 里跑了会超时的命令，如等 swallow --status 阻塞）后即恢复。
+- **战报突然全停、一条都不来**：多半是某次执行卡死把后续全排队了。问 Hermes「看下定时任务有没有卡住的执行，卡住的清掉，再手动触发一次战报」。修好那个卡住的 prompt（通常是战报 prompt 里跑了会超时的命令，如等 `run.sh --status` 阻塞）后即恢复。
 
 ## 解耦关系
 
