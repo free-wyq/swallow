@@ -15,21 +15,27 @@ swallow 自驱推进开发任务、把结果结构化落盘，**不发战报、�
 
 推进靠 `--watch` 长进程，崩了重启续跑（重启后从 `state.json` 恢复点继续，不丢进度、不重复打勾）。
 
-> 没装好先看 [install.md](../install.md)（装好 → 注册进你的 skills 目录 → 配密钥）。本文只讲怎么用、怎么看状态、怎么发战报。skill 自带脚本（`orchestrator.ts` + `run.sh`），注册即用——首次跑 `swallow` 时 `run.sh` 自动把依赖懒加载到 `~/.local/share/swallow/deps`（共享缓存，和代码树分离），无需预装。
+> 没装好先看 [install.md](../install.md)（装好 → 注册进你的 skills 目录 → 配密钥）。本文只讲怎么用、怎么看状态、怎么发战报。skill 自带脚本（`orchestrator.ts` + `run.sh`），**注册即用**——直接跑本 skill 目录里的 `run.sh`，不依赖 PATH 里的 `swallow` 命令；首次运行时 `run.sh` 自动把依赖懒加载到 `~/.local/share/swallow/deps`（共享缓存，和代码树分离），无需预装。
 
 ## 用法
 
+`run.sh` 是本 skill 的**唯一执行入口**——直接调它，不用敲 `swallow`（那个 PATH 命令是给人方便的，agent 不靠它）。`run.sh` 会自定位 + 懒加载依赖 + 透传所有参数给 `orchestrator.ts`。
+
 ```bash
-swallow --cwd <项目> "目标"       # 拉起推进（--watch 自驱）
-swallow --cwd <项目> --status     # 实时状态（人看）
-swallow --cwd <项目> --status --json   # 结构化 JSON（程序读，跨平台零依赖）
-swallow --cwd <项目> --report     # 运行报告
-swallow --cwd <项目> --stop        # 临时停（写 .stop 哨兵）
-swallow --cwd <项目> --resume     # 恢复运行（删 .stop 哨兵 + 若 watch 没在跑则从 state.json 拉起）
+# RUN 指向本 skill 目录里的 run.sh（注册后即在此目录）
+bash "$RUN" --cwd <项目> "目标"            # 拉起推进（--watch 自驱）
+bash "$RUN" --cwd <项目> --status          # 实时状态（人看）
+bash "$RUN" --cwd <项目> --status --json   # 结构化 JSON（程序读，跨平台零依赖）
+bash "$RUN" --cwd <项目> --report          # 运行报告
+bash "$RUN" --cwd <项目> --stop            # 临时停（写 .stop 哨兵 + 杀 watch）
+bash "$RUN" --cwd <项目> --resume          # 恢复运行（删 .stop 哨兵 + 若 watch 没在跑则从 state.json 拉起）
 ```
+
+> `$RUN` = 你注册本 skill 的目录里的 `run.sh` 绝对路径（例如 `~/.claude/skills/swallow-scheduler/run.sh`）。`run.sh` 靠 `BASH_SOURCE` 自定位，无论从哪调都能找到同目录的 `orchestrator.ts` 和 `package.json`。
 
 ⚠️ 目标项目绝不能是 swallow 仓库自身——会污染 git 历史。
 ⚠️ 停 swallow 用 `--stop`，别 `kill -9` watch 父进程——`--stop` 发 SIGTERM 会联动终止 claude 子进程后干净退出；`kill -9` 会让 claude 子进程变孤儿继续烧 token。`--resume` 恢复运行：删 `.stop` 哨兵，watch 没在跑时自动从 `state.json` 拉起（goal 从 state.json 读，无需再传）。
+⚠️ `run.sh` 首次跑会拉 ~530MB 依赖到 `~/.local/share/swallow/deps`（共享缓存，幂等跳过）；缺 Node 18+ / 缺密钥会提前提示，不会撞到莫名其妙错。
 
 ## 结构化结果（你发战报的数据源）
 

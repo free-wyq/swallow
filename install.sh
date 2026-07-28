@@ -102,15 +102,16 @@ do_install() {
     git clone --depth 1 "$REPO_URL" "$DEST"
   fi
 
-  # 2. 装 swallow 命令（指向 skill/run.sh——脚本自定位 + 依赖懒加载，见下）
-  say "安装 swallow 命令到 $BIN_DIR"
+  # 2. 装 swallow 命令（可选便利——人敲 swallow 比 bash .../run.sh 短；agent 直接调 skill 目录的 run.sh，不靠它）
+  say "安装 swallow 命令到 $BIN_DIR（人用便利入口；agent 直接调 skill/run.sh，不依赖它）"
   safe_write "$BIN_DIR/swallow" '#!/usr/bin/env bash
 # swallow —— 24h 无人值守开发 orchestrator 入口，透传所有参数给 skill/run.sh
+# 注：这是给人敲短命令用的便利 wrapper。agent 直接调 skill 目录里的 run.sh，不经过这里。
 exec "'"$DEST"'/skill/run.sh" "$@"
 '
   chmod +x "$BIN_DIR/swallow"
 
-  # 注：依赖（node_modules ~530MB）不再在 install 期装。首次跑 swallow 时由 skill/run.sh
+  # 注：依赖（node_modules ~530MB）不在 install 期装。首次跑 swallow 时由 skill/run.sh
   # 懒加载到 $HOME/.local/share/swallow/deps（共享缓存，和代码树分离），幂等跳过。
 
   # 3. 配置模板：swallow.env.example 拷到 ~/.config（不覆盖已有，已有让用户自己改——含密钥）
@@ -130,12 +131,13 @@ exec "'"$DEST"'/skill/run.sh" "$@"
   say "安装完成！"
   echo
   echo "  代码：$DEST（git clone，含 skill/）"
-  echo "  命令：$BIN_DIR/swallow  → skill/run.sh（自定位 + 懒加载依赖）"
-  echo "  依赖：首次跑 swallow 时自动拉到 ~/.local/share/swallow/deps（~530MB，共享缓存，幂等跳过）"
+  echo "  skill 入口：$DEST/skill/run.sh ← agent 直接调这个（注册 skill 即用，不依赖 PATH）"
+  echo "  人用便利：$BIN_DIR/swallow → skill/run.sh（敲短命令用，agent 不靠它）"
+  echo "  依赖：首次跑时自动拉到 ~/.local/share/swallow/deps（~530MB，共享缓存，幂等跳过）"
   echo
-  echo "  直接跑：    swallow --cwd /path/to/your/project \"你的开发目标\""
-  echo "  看状态：    swallow --cwd /path/to/your/project --status"
-  echo "  运行报告：  swallow --cwd /path/to/your/project --report"
+  echo "  人直接跑：  swallow --cwd /path/to/your/project \"你的开发目标\""
+  echo "  agent 跑：  bash <skill目录>/run.sh --cwd /path/to/your/project \"你的开发目标\""
+  echo "  看状态：    swallow --cwd /path/to/your/project --status   （或 bash <skill>/run.sh --status）"
   echo
   echo "  ⚠️ --cwd 指向你要开发的目标项目，别指向 swallow 仓库自身。"
   echo
@@ -145,9 +147,9 @@ exec "'"$DEST"'/skill/run.sh" "$@"
   echo "  战报/推送：orchestrator 只把结果结构化到 state.json/events.jsonl，"
   echo "  由外部 agent 读这些结果自行组织发送，orchestrator 不发战报。"
   echo
-  echo "  注册 skill（必须——agent 调度 swallow 的入口；拷真目录非 symlink）："
+  echo "  注册 skill（agent 用 swallow 的入口；拷真目录非 symlink）："
   echo "    让你用的 agent 自己发现它的 skills 目录并 cp -r $DEST/skill 进去，目标名 swallow-scheduler"
-  echo "    （skill 自带脚本 orchestrator.ts + run.sh，注册即用，依赖首次运行懒加载）"
+  echo "    （注册即用：agent 直接 bash <skill>/run.sh，依赖首次运行懒加载，无需 PATH）"
   echo "  卸载时清理各 agent 的 skill 拷贝：export SWALLOW_SKILL_DIRS=<skills-dir> 后再 uninstall"
   echo "  卸载：bash $DEST/install.sh uninstall"
 }

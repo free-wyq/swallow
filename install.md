@@ -8,7 +8,7 @@
 curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
 ```
 
-装到中立路径（不碰任何 agent 私有目录）：代码 `~/.local/share/swallow`（git clone，含 `skill/`）、命令 `~/.local/bin/swallow`（→ `skill/run.sh`）、配置 `~/.config/swallow/swallow.env`。依赖首次跑 `swallow` 时由 `skill/run.sh` 懒加载到 `~/.local/share/swallow/deps`（和代码树分离的共享缓存，幂等跳过）。已有同名文件自动备份成 `.bak`，不静默覆盖。不改 shell rc（PATH 不在 `~/.local/bin` 会提示加一行）。前提：Node 18+（脚本会检查，没有则提示）。
+装到中立路径（不碰任何 agent 私有目录）：代码 `~/.local/share/swallow`（git clone，含 `skill/`）、人用便利命令 `~/.local/bin/swallow`（→ `skill/run.sh`，agent 不靠它）、配置 `~/.config/swallow/swallow.env`。依赖首次跑时由 `skill/run.sh` 懒加载到 `~/.local/share/swallow/deps`（和代码树分离的共享缓存，幂等跳过）。已有同名文件自动备份成 `.bak`，不静默覆盖。不改 shell rc（PATH 不在 `~/.local/bin` 会提示加一行）。前提：Node 18+（脚本会检查，没有则提示）。
 
 ### 配密钥
 
@@ -24,9 +24,9 @@ chmod 600 ~/.config/swallow/swallow.env   # 密钥别让别的用户读到
 
 不走代理只填 `ANTHROPIC_API_KEY`。想换配置路径：`export SWALLOW_ENV_FILE=/path/to/your.env`。
 
-## 2. 注册 skill（必须——你调度 swallow 的入口）
+## 2. 注册 skill（agent 调度 swallow 的入口）
 
-skill（`SKILL.md` + 自带脚本 `orchestrator.ts`/`run.sh`）告诉你怎么跑 swallow / 读状态 / 发战报。**用 swallow 前必须注册进你自己的 skills 目录。** 注册后一步即用——首次跑 `swallow` 时 `run.sh` 自动把依赖懒加载到 `~/.local/share/swallow/deps`（共享缓存），无需预装。
+skill（`SKILL.md` + 自带脚本 `orchestrator.ts`/`run.sh`）告诉你怎么跑 swallow / 读状态 / 发战报。**用 swallow 前必须注册进你自己的 skills 目录。** 注册即用——agent 直接 `bash <skill目录>/run.sh`，不依赖 PATH 命令、无需预装依赖（首次运行 `run.sh` 自动懒加载到 `~/.local/share/swallow/deps`，共享缓存）。
 
 1. 推理你自己的 skills 目录（查你自己的文档/约定，不确定就问用户）。
 2. 把源目录 `~/.local/share/swallow/skill` **拷成真目录**（`cp -r`，不要 symlink——多数 agent 的 skill 扫描器用 find/glob 遍历、默认不跟符号链接进子目录，symlink 进去的 skill 你看不见）。
@@ -38,10 +38,14 @@ swallow 升级后重做上面步骤刷新 skill 内容。
 ## 3. 会跑
 
 ```bash
-swallow --cwd /path/to/your/project "你的开发目标"   # --watch 自驱跑到底（一次拉起）
-swallow --cwd /path/to/your/project --status        # 实时状态（人看）
-swallow --cwd /path/to/your/project --status --json # 结构化 JSON（程序读，跨平台零依赖）
-swallow --cwd /path/to/your/project --report        # 运行报告
+# agent 直接调 skill 里的 run.sh（注册即用，不依赖 PATH）：
+bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/your/project "你的开发目标"   # --watch 自驱跑到底
+bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/your/project --status          # 实时状态（人看）
+bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/your/project --status --json   # 结构化 JSON（程序读）
+bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/your/project --report          # 运行报告
+
+# 人想敲短命令也行（install.sh 装的 PATH 便利 wrapper，指向同一个 run.sh）：
+swallow --cwd /path/to/your/project "你的开发目标"
 ```
 
 ⚠️ `--cwd` 指向你要开发的目标项目（orchestrator 往那写产物 + git commit），**别指向 swallow 仓库自身**。

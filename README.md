@@ -207,7 +207,7 @@ swallow --cwd /path/to/project "构建一个 Go REST API"
 
 ## 注册成 skill（让 agent 会用 swallow）
 
-`skill/` 是一个可被 agent 加载的 skill（含 `SKILL.md` + 自带脚本 `orchestrator.ts`/`run.sh`），是 agent 调度 swallow 的入口。**用 swallow 前必须注册进 agent 的 skills 目录。** 注册即用——首次跑 `swallow` 时 `run.sh` 自动把依赖（`node_modules` ~530MB）懒加载到 `~/.local/share/swallow/deps`（共享缓存，和代码树分离），无需预装。不预设具体哪个 agent——让 agent 自己发现它的 skills 目录并注册（install.md 是给 agent 读的指令，agent 读到即执行）。
+`skill/` 是一个可被 agent 加载的 skill（含 `SKILL.md` + 自带脚本 `orchestrator.ts`/`run.sh`），是 agent 调度 swallow 的入口。**用 swallow 前必须注册进 agent 的 skills 目录。** 注册即用——agent 直接 `bash <skill目录>/run.sh`，不依赖 PATH 命令；首次运行 `run.sh` 自动把依赖（`node_modules` ~530MB）懒加载到 `~/.local/share/swallow/deps`（共享缓存，和代码树分离），无需预装。不预设具体哪个 agent——让 agent 自己发现它的 skills 目录并注册（install.md 是给 agent 读的指令，agent 读到即执行）。
 
 多数 agent 的 skill 扫描器用 find/glob 遍历 skills 目录、**默认不跟符号链接进子目录**——symlink 进去的 skill 扫描器看不见。所以注册时**拷成真目录**而非 symlink。详见 [install.md](install.md)。
 
