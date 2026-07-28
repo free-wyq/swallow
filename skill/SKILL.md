@@ -15,7 +15,7 @@ swallow 自驱推进开发任务、把结果结构化落盘，**不发战报、�
 
 推进靠 `--watch` 长进程，崩了重启续跑（重启后从 `state.json` 恢复点继续，不丢进度、不重复打勾）。
 
-> 没装好先看 [install.md](../install.md)（装好 → 注册进你的 skills 目录 → 配密钥）。本文只讲怎么用、怎么看状态、怎么发战报。
+> 没装好先看 [install.md](../install.md)（装好 → 注册进你的 skills 目录 → 配密钥）。本文只讲怎么用、怎么看状态、怎么发战报。skill 自带脚本（`orchestrator.ts` + `run.sh`），注册即用——首次跑 `swallow` 时 `run.sh` 自动把依赖懒加载到 `~/.local/share/swallow/deps`（共享缓存，和代码树分离），无需预装。
 
 ## 用法
 

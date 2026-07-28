@@ -5,12 +5,13 @@
 #   卸载：  curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash -s -- uninstall
 #           （已装好则直接：bash ~/.local/share/swallow/install.sh uninstall）
 #           清理新 agent 的 skill 拷贝：export SWALLOW_SKILL_DIRS=<dir>:<dir> 后再 uninstall
-#   重装：  ... | bash -s -- reinstall    （= 干净卸载后全新安装，解决 node_modules 脏 / 代码树卡住）
-#   升级：  重跑安装命令即可（增量：git pull + npm install，保留你的本地改动与配置）
+#   重装：  ... | bash -s -- reinstall    （= 干净卸载后全新安装，解决代码树卡住 / 懒加载缓存脏）
+#   升级：  重跑安装命令即可（增量：git pull，保留你的本地改动与配置；依赖懒加载缓存不动）
 #
 # 装到 POSIX 中立路径（不进任何 agent 私有目录）：
-#   代码  ~/.local/share/swallow
-#   命令  ~/.local/bin/swallow       (自驱入口，透传参数给 orchestrator.ts)
+#   代码  ~/.local/share/swallow（git clone，含 skill/）
+#   命令  ~/.local/bin/swallow       (自驱入口 → skill/run.sh 透传参数给 orchestrator.ts)
+#   依赖  ~/.local/share/swallow/deps（首次跑 swallow 时由 skill/run.sh 懒加载，和代码树分离）
 #   配置  ~/.config/swallow/swallow.env  (密钥/代理/模型，chmod 600)
 set -euo pipefail
 
@@ -101,19 +102,18 @@ do_install() {
     git clone --depth 1 "$REPO_URL" "$DEST"
   fi
 
-  # 2. 装依赖
-  say "安装依赖（npm install）"
-  npm install --prefix "$DEST" --silent
-
-  # 3. 装 swallow 命令（路径已固化进脚本，readlink 自定位无关，换机器照样跑）
+  # 2. 装 swallow 命令（指向 skill/run.sh——脚本自定位 + 依赖懒加载，见下）
   say "安装 swallow 命令到 $BIN_DIR"
   safe_write "$BIN_DIR/swallow" '#!/usr/bin/env bash
-# swallow —— 24h 无人值守开发 orchestrator 入口，透传所有参数给 orchestrator.ts
-exec "'"$DEST"'/node_modules/.bin/tsx" "'"$DEST"'/orchestrator.ts" "$@"
+# swallow —— 24h 无人值守开发 orchestrator 入口，透传所有参数给 skill/run.sh
+exec "'"$DEST"'/skill/run.sh" "$@"
 '
   chmod +x "$BIN_DIR/swallow"
 
-  # 4. 配置模板：swallow.env.example 拷到 ~/.config（不覆盖已有，已有让用户自己改——含密钥）
+  # 注：依赖（node_modules ~530MB）不再在 install 期装。首次跑 swallow 时由 skill/run.sh
+  # 懒加载到 $HOME/.local/share/swallow/deps（共享缓存，和代码树分离），幂等跳过。
+
+  # 3. 配置模板：swallow.env.example 拷到 ~/.config（不覆盖已有，已有让用户自己改——含密钥）
   if [ ! -f "$CONF_DIR/swallow.env" ] && [ -f "$DEST/swallow.env.example" ]; then
     cp "$DEST/swallow.env.example" "$CONF_DIR/swallow.env"
     chmod 600 "$CONF_DIR/swallow.env"
@@ -129,7 +129,9 @@ exec "'"$DEST"'/node_modules/.bin/tsx" "'"$DEST"'/orchestrator.ts" "$@"
   echo
   say "安装完成！"
   echo
-  echo "  装在：$DEST（代码）  $BIN_DIR/swallow（命令）"
+  echo "  代码：$DEST（git clone，含 skill/）"
+  echo "  命令：$BIN_DIR/swallow  → skill/run.sh（自定位 + 懒加载依赖）"
+  echo "  依赖：首次跑 swallow 时自动拉到 ~/.local/share/swallow/deps（~530MB，共享缓存，幂等跳过）"
   echo
   echo "  直接跑：    swallow --cwd /path/to/your/project \"你的开发目标\""
   echo "  看状态：    swallow --cwd /path/to/your/project --status"
@@ -145,7 +147,7 @@ exec "'"$DEST"'/node_modules/.bin/tsx" "'"$DEST"'/orchestrator.ts" "$@"
   echo
   echo "  注册 skill（必须——agent 调度 swallow 的入口；拷真目录非 symlink）："
   echo "    让你用的 agent 自己发现它的 skills 目录并 cp -r $DEST/skill 进去，目标名 swallow-scheduler"
-  echo "    （不预设哪个 agent——agent 自己推理目录；扫描器不跟 symlink，所以拷真目录）"
+  echo "    （skill 自带脚本 orchestrator.ts + run.sh，注册即用，依赖首次运行懒加载）"
   echo "  卸载时清理各 agent 的 skill 拷贝：export SWALLOW_SKILL_DIRS=<skills-dir> 后再 uninstall"
   echo "  卸载：bash $DEST/install.sh uninstall"
 }

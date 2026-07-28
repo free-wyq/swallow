@@ -8,7 +8,7 @@
 curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
 ```
 
-装到中立路径（不碰任何 agent 私有目录）：代码 `~/.local/share/swallow`、命令 `~/.local/bin/swallow`、配置 `~/.config/swallow/swallow.env`。已有同名文件自动备份成 `.bak`，不静默覆盖。不改 shell rc（PATH 不在 `~/.local/bin` 会提示加一行）。前提：Node 18+（脚本会检查，没有则提示）。
+装到中立路径（不碰任何 agent 私有目录）：代码 `~/.local/share/swallow`（git clone，含 `skill/`）、命令 `~/.local/bin/swallow`（→ `skill/run.sh`）、配置 `~/.config/swallow/swallow.env`。依赖首次跑 `swallow` 时由 `skill/run.sh` 懒加载到 `~/.local/share/swallow/deps`（和代码树分离的共享缓存，幂等跳过）。已有同名文件自动备份成 `.bak`，不静默覆盖。不改 shell rc（PATH 不在 `~/.local/bin` 会提示加一行）。前提：Node 18+（脚本会检查，没有则提示）。
 
 ### 配密钥
 
@@ -26,7 +26,7 @@ chmod 600 ~/.config/swallow/swallow.env   # 密钥别让别的用户读到
 
 ## 2. 注册 skill（必须——你调度 swallow 的入口）
 
-skill（`SKILL.md`）告诉你怎么跑 swallow / 读状态 / 发战报。**用 swallow 前必须注册进你自己的 skills 目录。**
+skill（`SKILL.md` + 自带脚本 `orchestrator.ts`/`run.sh`）告诉你怎么跑 swallow / 读状态 / 发战报。**用 swallow 前必须注册进你自己的 skills 目录。** 注册后一步即用——首次跑 `swallow` 时 `run.sh` 自动把依赖懒加载到 `~/.local/share/swallow/deps`（共享缓存），无需预装。
 
 1. 推理你自己的 skills 目录（查你自己的文档/约定，不确定就问用户）。
 2. 把源目录 `~/.local/share/swallow/skill` **拷成真目录**（`cp -r`，不要 symlink——多数 agent 的 skill 扫描器用 find/glob 遍历、默认不跟符号链接进子目录，symlink 进去的 skill 你看不见）。
@@ -53,10 +53,10 @@ swallow --cwd /path/to/your/project --report        # 运行报告
 curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash -s -- uninstall
 # 已装好可直接：bash ~/.local/share/swallow/install.sh uninstall
 
-# 重装（= 干净卸载 + 全新安装，解决 node_modules 脏 / 代码树卡住）
+# 重装（= 干净卸载 + 全新安装，解决代码树卡住 / 懒加载缓存脏）
 curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash -s -- reinstall
 
-# 升级（重跑安装命令即可，增量更新，保留本地改动与配置）
+# 升级（重跑安装命令即可，增量 git pull，保留本地改动与配置；依赖懒加载缓存不动）
 curl -fsSL https://raw.githubusercontent.com/free-wyq/swallow/main/install.sh | bash
 ```
 
