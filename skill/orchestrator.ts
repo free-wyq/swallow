@@ -1179,18 +1179,22 @@ process.on("SIGINT", handleSignal);
 
 // 把爆掉的 task/goal 拆成 N 个子项（N 模型自决——大任务可能 5+ 个、小任务可能 2 个，
 // 不写死任何数字约束，唯一约束是「每个子项能单独会话内完成」）。
-// 不喂项目知识 + prompt 明令禁探索（对齐 bootstrap）：死信项已爆过一次，再读文件只会让
-// 爆过的上下文再爆一次（split_failed→进 failed_tasks）。拆是结构判断，只基于给出的内容文本拆。
+// 喂 CLAUDE.md/勘察基线 + prompt 明令禁探索（完全对齐 bootstrap）：基线让拆得更准（同 bootstrap
+// 知识优先），禁探索避免爆过的死信项再爆。基线由代码读、截断、一次性塞进 prompt，量固定可控
+// （≤2万≈5-6k token）；爆的根因是模型 agentic 读文件探索（无限轮），不是基线本身——喂基线与
+// 禁探索不矛盾。死信项再爆→split_failed→进 failed_tasks。
 // 输出解析照抄 bootstrapTasks：text.split("\n").filter((l) => /^- \[ \]/.test(l))。
 // query options 照 bootstrapTasks 模式：新会话（不 resume，区别于 probeCompactDeep）、
 // bypassPermissions、disallowedTools 含 EnterPlanMode/ExitPlanMode/AskUserQuestion。
 async function splitTask(content: string): Promise<string[]> {
   log(`🔧 splitTask 拆分（模型自决子项数）：${content.slice(0, 80)}`);
+  const knowledge = loadProjectKnowledge();
+  log(`📚 已加载项目知识 ${knowledge.length} 字符（CLAUDE.md/memory 基线，禁探索，对齐 bootstrap）`);
   const q = query({
     prompt: `## 角色
 你是无人值守开发助手。下方给你一个"一次装不下、爆掉了"的 task（或 goal）。像项目经理一样把它拆成若干个独立、可单独会话内完成的子 task。
 
-⚠️ 拆分是结构判断、不需要实现细节——不要主动读文件、不要探索代码，只基于下方给出的内容拆。死信项已爆过一次上下文，再读文件只会让它再爆一次。
+⚠️ 拆分是结构判断、不需要实现细节——不要主动读文件、不要探索代码，只基于下方给出的项目背景和要拆的内容拆。死信项已爆过一次上下文，再读文件只会让它再爆一次。
 
 ## 铁律
 1. 绝对不要向用户提问任何问题，不要等待确认。
@@ -1198,6 +1202,9 @@ async function splitTask(content: string): Promise<string[]> {
 3. 子项数量完全由你判断：拆少了下轮还爆就再拆（反馈驱动），拆多了能装下就行。不限制数量。
 4. 唯一约束：每个子 task 要能在单个会话内独立完成（同 bootstrap 小任务约束）。
 5. 子项之间保依赖顺序排列。
+
+## 项目背景（结构与约束基线，同 bootstrap）
+${knowledge}
 
 ## 输出格式（同 bootstrap）
 只输出任务列表，每行一个，不要其它内容：
