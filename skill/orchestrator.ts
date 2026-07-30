@@ -1231,11 +1231,12 @@ ${content}`,
   return taskLines;
 }
 
-// ---------------- bootstrap：知识优先，按需探索 ----------------
+// ---------------- bootstrap：知识优先，禁探索（防拆任务爆上下文）----------------
 // 旧设计让 LLM 自己 agentic 探索项目拿上下文 → 要么探索过度爆上下文（Claude Code 拆得准但爆）、
 // 要么没上下文纯靠 goal 猜（Hermes 拆得不准）。根因是「谁拿项目上下文」绑在了 LLM 身上。
-// 改法：把最高价值的现成知识（CLAUDE.md + memory）由 orchestrator 代码直接读出来喂进 prompt，
-// 模型拿这些做基线，剩下不够的按需自己探索——不限制死，只把它从「无脑全扫」掰向「已知为基、按需补」。
+// 改法：把最高价值的现成知识（CLAUDE.md）由 orchestrator 代码直接读出来喂进 prompt 当基线，
+// 模型只基于基线做 PM 式结构拆解——prompt 明确禁止主动读文件探索。
+// 拆任务是结构判断（目标+架构+约束），不需要实现细节；读文件探索才是 bootstrap 爆上下文的根因。
 // 复用 claude code 已沉淀的知识，旧工程不重扫；新工程走退路给个目录概览当起点。
 
 // 退路：新工程/没用过 claude code 时，代码读一个轻量项目结构概览当探索起点（不是真相、只是地图）。
@@ -1268,7 +1269,7 @@ function surveyProjectTree(): string {
 }
 
 // 读最高价值的现成知识喂给 bootstrap：CLAUDE.md（项目说明书，全文，通常不大）。
-// 给完基线后不锁死——剩余细节模型按需自己探索（prompt 说明），而不是无脑全扫。
+// 喂完基线后锁死探索——拆任务是 PM 式结构判断，prompt 明确禁止主动读文件（防爆，根因是探索而非基线）。
 // 项目记忆（auto-memory）由引擎 query() 自动注入（system-reminder 形式，和 CLI 同份），
 // swallow 不显式喂——避免重复占上下文（防爆），且 worker 能自然看到。
 function loadProjectKnowledge(): string {
@@ -1289,11 +1290,11 @@ async function bootstrapTasks(goal: string, append = false) {
   log("首次运行，拆解任务...");
   log(`目标：${goal}`);
   const knowledge = loadProjectKnowledge();
-  log(`📚 已加载项目知识 ${knowledge.length} 字符（CLAUDE.md/memory 基线 + 按需探索）`);
+  log(`📚 已加载项目知识 ${knowledge.length} 字符（CLAUDE.md/memory 基线，禁探索）`);
   const q = query({
-    // 高价值现成知识由代码喂进来当基线；CLAUDE.md/memory 之外、拆任务还需要细节时，模型按需自己探索，
-    // 不要无脑全扫（那是爆上下文的根因）。已知为基、按需补，而非限制死。
-    prompt: `根据用户目标拆解为最小可执行任务列表。下方【项目背景】是已为你准备的最高价值知识（CLAUDE.md / 记忆 / 勘察），先吃透它做基线；拆任务还需的细节按需自己探索，但只读相关的、别无脑全扫。
+    // 高价值现成知识由代码喂进来当基线；拆任务是 PM 式结构判断（目标+架构+约束），不需要实现细节，
+    // 读文件探索是 bootstrap 爆上下文的根因——prompt 明令禁止主动读文件，从根上预防爆，死信兜底是补救，两者互补。
+    prompt: `像项目经理一样，根据用户目标把工作拆成最小可执行任务列表。下方【项目背景】（CLAUDE.md / 勘察）是为你准备的结构与约束基线，吃透它即可。拆任务是结构判断、不需要实现细节——不要主动读文件、不要探索代码，只基于已提供的背景拆。
 
 ${knowledge}
 
@@ -1311,7 +1312,8 @@ ${knowledge}
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       maxTurns: hasLimit(BOOTSTRAP_MAX_TURNS) ? BOOTSTRAP_MAX_TURNS : undefined,
-      // 不禁文件工具：CLAUDE.md/memory 当基线喂进来了，剩下按需探索。无脑全扫才爆上下文，按需探索不会。
+      // 不禁文件工具：CLAUDE.md 当基线由代码喂进来，但 prompt 已明令禁止主动探索——靠措辞引导而非硬禁。
+      // 硬禁 Read/Grep 太重，万一真要瞄一眼目录会卡死；CLAUDE.md 不靠工具读，禁探索不影响基线注入。
       disallowedTools: ["EnterPlanMode", "ExitPlanMode", "AskUserQuestion"],
     },
   });

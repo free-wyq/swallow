@@ -236,13 +236,13 @@ bash <skill目录>/run.sh --cwd /path/to/project "构建一个 Go REST API"
 
 **探针/重试都兜不住才拆**：连续 3 次 ctx_overflow 达限 → 任务入死信队列，下 tick `splitTask` 拆成可单独完成的子项回插（反馈驱动深度，不预先递归）。bootstrap 爆/截断同理（goal 入队→拆子 goal 独立 bootstrap）。这是最底层兜底，详见 [docs/dead-letter-design.md](docs/dead-letter-design.md)。
 
-### bootstrap 知识优先 + 按需探索（防拆任务爆上下文）
+### bootstrap 知识优先 + 禁探索（防拆任务爆上下文）
 
-旧设计让 LLM 自己 agentic 探索项目拿上下文 → 要么探索过度爆上下文（Claude Code 拆得准但爆）、要么没上下文纯猜（Hermes 拆得不准）。根因是「谁拿项目上下文」绑在 LLM 身上。
+旧设计让 LLM 自己 agentic 探索项目拿上下文 → 要么探索过度爆上下文（Claude Code 拆得准但爆）、要么没上下文纯猜（Hermes 拆得不准）。根因是「谁拿项目上下文」绑在 LLM 身上，且探索许可是爆上下文的根因。
 
-改法：**把最高价值的现成知识由 orchestrator 代码直接读出来喂进 prompt 当基线，模型拿这些做底，剩余按需自己探索——不限制死，只把它从「无脑全扫」掰向「已知为基、按需补」。** 基线由代码显式喂的只有 `CLAUDE.md`（项目说明书，密度最高）；项目记忆（`.claude/memory/*.md`）由**引擎 `query()` 自动注入**（system-reminder 形式，和 CLI 同份），swallow 不显式喂——避免重复占上下文，worker 自然能看到。退路：CLAUDE.md 不存在时代码轻量勘察目录树（限深 3 层 + manifest，跳依赖/构建产物大目录、保留隐藏文件）当探索起点，总长截断 20k。
+改法：**把最高价值的现成知识由 orchestrator 代码直接读出来喂进 prompt 当基线，模型像项目经理一样只基于基线做结构拆解，prompt 明确禁止主动读文件探索。** 拆任务是结构判断（目标+架构+约束），不需要实现细节——读文件探索才是 bootstrap 爆上下文的根因。基线由代码显式喂的只有 `CLAUDE.md`（项目说明书，密度最高）；项目记忆（`.claude/memory/*.md`）由**引擎 `query()` 自动注入**（system-reminder 形式，和 CLI 同份），swallow 不显式喂——避免重复占上下文，worker 自然能看到。退路：CLAUDE.md 不存在时代码轻量勘察目录树（限深 3 层 + manifest，跳依赖/构建产物大目录、保留隐藏文件）当探索起点，总长截断 20k。
 
-**不锁死文件工具**：CLAUDE.md 当基线喂进来（memory 引擎注入），剩下细节模型按需 Read/Grep——无脑全扫才爆上下文，按需探索不会。旧工程复用已有知识、不重扫；真新工程走退路给个地图当起点。Hermes 以前不准就是没上下文，现在基线喂进去了，谁拆都准。
+**靠措辞引导而非硬禁文件工具**：CLAUDE.md 当基线喂进来（memory 引擎注入），prompt 明令不许主动探索代码。没硬禁 Read/Grep——太重，万一真要瞄一眼目录会卡死，且 CLAUDE.md 不靠工具读，禁探索不影响基线注入。这是从根上做**预防**，死信兜底是**补救**，两者互补：禁探索把爆的概率压到极低（上下文≈knowledge≤2万截断+goal+输出，离窗口很远），真爆了死信队列接。
 
 ⚠️ GLM 等代理模型上下文有限（运行时由 orchestrator 经 `getContextUsage` 实测，不写死）。worker prompt 已加节流铁律：只读与当前任务相关的文件、复用 `.claude/memory/` 已有背景、大文件 Grep 定位再按行 Read。目标项目可放 `.claudeignore` 进一步压扫描范围。orchestrator 这层另加 ctx 健康度探针：上轮 token 占比超阈值先发 `/compact deep` 压一轮，压不下来再弃旧会话开新会话。
 
