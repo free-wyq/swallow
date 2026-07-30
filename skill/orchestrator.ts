@@ -1179,6 +1179,8 @@ process.on("SIGINT", handleSignal);
 
 // 把爆掉的 task/goal 拆成 N 个子项（N 模型自决——大任务可能 5+ 个、小任务可能 2 个，
 // 不写死任何数字约束，唯一约束是「每个子项能单独会话内完成」）。
+// 不喂项目知识 + prompt 明令禁探索（对齐 bootstrap）：死信项已爆过一次，再读文件只会让
+// 爆过的上下文再爆一次（split_failed→进 failed_tasks）。拆是结构判断，只基于给出的内容文本拆。
 // 输出解析照抄 bootstrapTasks：text.split("\n").filter((l) => /^- \[ \]/.test(l))。
 // query options 照 bootstrapTasks 模式：新会话（不 resume，区别于 probeCompactDeep）、
 // bypassPermissions、disallowedTools 含 EnterPlanMode/ExitPlanMode/AskUserQuestion。
@@ -1186,7 +1188,9 @@ async function splitTask(content: string): Promise<string[]> {
   log(`🔧 splitTask 拆分（模型自决子项数）：${content.slice(0, 80)}`);
   const q = query({
     prompt: `## 角色
-你是无人值守开发助手。下方给你一个"一次装不下、爆掉了"的 task（或 goal）。把它拆成若干个独立、可单独会话内完成的子 task。
+你是无人值守开发助手。下方给你一个"一次装不下、爆掉了"的 task（或 goal）。像项目经理一样把它拆成若干个独立、可单独会话内完成的子 task。
+
+⚠️ 拆分是结构判断、不需要实现细节——不要主动读文件、不要探索代码，只基于下方给出的内容拆。死信项已爆过一次上下文，再读文件只会让它再爆一次。
 
 ## 铁律
 1. 绝对不要向用户提问任何问题，不要等待确认。
