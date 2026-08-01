@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark scroll-smooth">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>swallow · 24 小时无人值守开发 orchestrator</title>
+  <meta name="description" content="给一个开发目标，swallow 自己拆任务、自己执行、崩了自己恢复。基于 Claude Agent SDK 的 24h 无人值守开发 orchestrator。">
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              400: '#818cf8',
+              500: '#6366f1',
+              600: '#4f46e5',
+              900: '#312e81',
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Google Fonts Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- Mermaid for architecture diagram -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    code, pre, .font-mono { font-family: 'JetBrains Mono', monospace; }
+
+    /* Grid background */
+    .bg-tech-grid {
+      background-size: 32px 32px;
+      background-image:
+        linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    }
+    .hero-glow {
+      background:
+        radial-gradient(60% 50% at 50% 0%, rgba(99, 102, 241, 0.18) 0%, transparent 70%),
+        radial-gradient(40% 40% at 80% 10%, rgba(245, 158, 11, 0.12) 0%, transparent 70%),
+        radial-gradient(40% 40% at 15% 20%, rgba(52, 211, 153, 0.10) 0%, transparent 70%);
+    }
+    .gradient-text {
+      background: linear-gradient(90deg, #fbbf24, #818cf8 50%, #34d399);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .card-hover { transition: transform .2s ease, border-color .2s ease, background-color .2s ease; }
+    .card-hover:hover { transform: translateY(-3px); }
+
+    /* mermaid dark theming overrides */
+    .mermaid { display: flex; justify-content: center; }
+    .mermaid svg { max-width: 100%; height: auto; }
+
+    ::-webkit-scrollbar { width: 9px; height: 9px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 5px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+    /* subtle reveal on scroll */
+    .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
+    .reveal.in { opacity: 1; transform: none; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-200 antialiased">
+
+  <!-- ===================== NAV ===================== -->
+  <nav class="sticky top-0 z-50 bg-slate-950/80 backdrop-blur border-b border-slate-800/80">
+    <div class="max-w-6xl mx-auto px-5 h-14 flex items-center justify-between">
+      <a href="#" class="flex items-center gap-2.5">
+        <span class="w-8 h-8 rounded-lg bg-gradient-to-tr from-amber-500 via-indigo-500 to-emerald-400 p-[2px]">
+          <span class="w-full h-full bg-slate-950 rounded-[6px] flex items-center justify-center">
+            <i class="fa-solid fa-bolt text-amber-400 text-xs"></i>
+          </span>
+        </span>
+        <span class="font-semibold tracking-wide text-slate-100">swallow</span>
+        <span class="hidden sm:inline text-[11px] font-mono text-slate-500 border border-slate-700 rounded-full px-1.5 py-0.5">orchestrator</span>
+      </a>
+      <div class="hidden md:flex items-center gap-6 text-sm text-slate-400">
+        <a href="#problem" class="hover:text-slate-100 transition">痛点</a>
+        <a href="#how" class="hover:text-slate-100 transition">怎么解</a>
+        <a href="#features" class="hover:text-slate-100 transition">特性</a>
+        <a href="#architecture" class="hover:text-slate-100 transition">架构</a>
+        <a href="#start" class="hover:text-slate-100 transition">快速开始</a>
+        <a href="#faq" class="hover:text-slate-100 transition">FAQ</a>
+      </div>
+      <a href="https://github.com/free-wyq/swallow" target="_blank" rel="noopener"
+         class="flex items-center gap-2 text-sm bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 px-3 py-1.5 rounded-lg transition">
+        <i class="fa-brands fa-github"></i><span class="hidden sm:inline">GitHub</span>
+      </a>
+    </div>
+  </nav>
+
+  <!-- ===================== HERO ===================== -->
+  <header class="relative overflow-hidden hero-glow">
+    <div class="absolute inset-0 bg-tech-grid pointer-events-none"></div>
+    <div class="relative max-w-6xl mx-auto px-5 pt-20 pb-24 text-center">
+      <div class="inline-flex items-center gap-2 text-xs font-mono text-indigo-300 bg-indigo-500/10 border border-indigo-500/30 rounded-full px-3 py-1 mb-7">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+        基于 @anthropic-ai/claude-agent-sdk · Apache-2.0
+      </div>
+      <h1 class="text-4xl sm:text-6xl font-extrabold tracking-tight text-slate-50 leading-tight">
+        给一个目标，<br class="sm:hidden">它<span class="gradient-text">自己拆任务、自己执行、崩了自己恢复</span>
+      </h1>
+      <p class="mt-6 max-w-2xl mx-auto text-lg text-slate-400 leading-relaxed">
+        swallow 是一个 24 小时无人值守开发 orchestrator。你给它一个开发目标，
+        它自己拆成可执行任务、自己跑、跑崩了从断点续跑——不依赖你盯着。
+      </p>
+      <div class="mt-9 flex flex-wrap items-center justify-center gap-3">
+        <a href="architecture-demo.html" target="_blank" rel="noopener"
+           class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-5 py-2.5 rounded-xl transition shadow-lg shadow-indigo-900/40">
+          <i class="fa-solid fa-play"></i> 查看动态演练
+        </a>
+        <a href="https://github.com/free-wyq/swallow" target="_blank" rel="noopener"
+           class="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 font-semibold px-5 py-2.5 rounded-xl transition">
+          <i class="fa-brands fa-github"></i> GitHub 仓库
+        </a>
+        <a href="#start"
+           class="flex items-center gap-2 text-slate-300 hover:text-white font-semibold px-3 py-2.5 rounded-xl transition">
+          快速开始 <i class="fa-solid fa-arrow-down text-xs"></i>
+        </a>
+      </div>
+      <div class="mt-12 flex flex-wrap items-center justify-center gap-x-7 gap-y-3 text-xs font-mono text-slate-500">
+        <span><i class="fa-solid fa-cube text-indigo-400 mr-1.5"></i>幂等 tick</span>
+        <span><i class="fa-solid fa-shield-halved text-emerald-400 mr-1.5"></i>崩溃恢复</span>
+        <span><i class="fa-solid fa-infinity text-amber-400 mr-1.5"></i>爆了才拆</span>
+        <span><i class="fa-solid fa-database text-sky-400 mr-1.5"></i>结构化落盘</span>
+        <span><i class="fa-solid fa-circle-check text-emerald-400 mr-1.5"></i>e2e 全绿</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===================== PROBLEM ===================== -->
+  <section id="problem" class="border-t border-slate-800/60">
+    <div class="max-w-6xl mx-auto px-5 py-20">
+      <div class="max-w-2xl mb-12 reveal">
+        <p class="text-sm font-mono text-indigo-400 mb-3">// 问题域</p>
+        <h2 class="text-3xl sm:text-4xl font-bold text-slate-50">AI 编程的会话级天花板</h2>
+        <p class="mt-4 text-slate-400 leading-relaxed">
+          交互式 AI 编程助手（如 Claude Code）以会话为核心，在长周期、无人值守场景下有四项结构性限制——
+          人一离开，任务就停。
+        </p>
+      </div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="reveal card-hover bg-slate-900/60 border border-slate-800 rounded-2xl p-5 hover:border-rose-500/40">
+          <i class="fa-solid fa-window-restore text-rose-400 text-xl mb-3"></i>
+          <h3 class="font-semibold text-slate-100 mb-1.5">上下文溢出</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">上下文撑爆，任务中断，半截进度卡住。</p>
+        </div>
+        <div class="reveal card-hover bg-slate-900/60 border border-slate-800 rounded-2xl p-5 hover:border-amber-500/40">
+          <i class="fa-solid fa-ghost text-amber-400 text-xl mb-3"></i>
+          <h3 class="font-semibold text-slate-100 mb-1.5">假完成</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">模型说"做完了"但零代码变更，无人复核就溜过去。</p>
+        </div>
+        <div class="reveal card-hover bg-slate-900/60 border border-slate-800 rounded-2xl p-5 hover:border-sky-500/40">
+          <i class="fa-solid fa-plug-circle-xmark text-sky-400 text-xl mb-3"></i>
+          <h3 class="font-semibold text-slate-100 mb-1.5">进程级失效</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">网络/系统让进程退出，几小时进度随之丢失。</p>
+        </div>
+        <div class="reveal card-hover bg-slate-900/60 border border-slate-800 rounded-2xl p-5 hover:border-indigo-500/40">
+          <i class="fa-solid fa-user-slash text-indigo-400 text-xl mb-3"></i>
+          <h3 class="font-semibold text-slate-100 mb-1.5">无人值守中断</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">缺少自动恢复，任务等人介入才能继续。</p>
+        </div>
+      </div>
+      <p class="mt-10 text-center text-slate-300 text-lg">
+        swallow 的目标：<span class="text-slate-50 font-semibold">给一个目标，系统自己拆任务、自己执行、崩了自己恢复。</span>
+      </p>
+    </div>
+  </section>
+
+  <!-- ===================== HOW ===================== -->
+  <section id="how" class="border-t border-slate-800/60 bg-slate-900/30">
+    <div class="max-w-6xl mx-auto px-5 py-20">
+      <div class="max-w-2xl mb-12 reveal">
+        <p class="text-sm font-mono text-emerald-400 mb-3">// 怎么解</p>
+        <h2 class="text-3xl sm:text-4xl font-bold text-slate-50">重但稳 + 使用简单</h2>
+        <p class="mt-4 text-slate-400 leading-relaxed">
+          核心理念：长跑拆成幂等单步 <code class="text-amber-300 font-mono text-sm">tick</code>，状态双层落盘，
+          进程崩溃天然可恢复。orchestrator 只管推进 + 结果结构化落盘，战报由外部 agent 读结果自行发送。
+        </p>
+      </div>
+      <div class="grid md:grid-cols-3 gap-5">
+        <div class="reveal card-hover bg-slate-950/60 border border-slate-800 rounded-2xl p-6">
+          <div class="w-10 h-10 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center mb-4">
+            <i class="fa-solid fa-list-check text-indigo-400"></i>
+          </div>
+          <h3 class="font-semibold text-slate-100 mb-2">任务分解</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            长目标拆成幂等单步 <code class="font-mono text-amber-300">tick</code>，每步可独立恢复。
+            bootstrap 像项目经理一样做结构判断，吃 CLAUDE.md 基线、不主动探索代码。
+          </p>
+        </div>
+        <div class="reveal card-hover bg-slate-950/60 border border-slate-800 rounded-2xl p-6">
+          <div class="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mb-4">
+            <i class="fa-solid fa-floppy-disk text-emerald-400"></i>
+          </div>
+          <h3 class="font-semibold text-slate-100 mb-2">可靠持久化</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            状态/事件结构化落盘：state.json 原子写当恢复点，events.jsonl append-only 当审计流。
+            <code class="font-mono text-amber-300">kill -9</code> 后从断点续跑，不丢进度、不重复打勾。
+          </p>
+        </div>
+        <div class="reveal card-hover bg-slate-950/60 border border-slate-800 rounded-2xl p-6">
+          <div class="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mb-4">
+            <i class="fa-solid fa-arrows-split-up-and-left text-amber-400"></i>
+          </div>
+          <h3 class="font-semibold text-slate-100 mb-2">职责解耦</h3>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            orchestrator 只管推进与落盘，不发战报。外部 agent 定时读已落盘结果，自行组织文案发企微/钉钉/邮件。
+            任一方挂了都不影响另一方。
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== FEATURES ===================== -->
+  <section id="features" class="border-t border-slate-800/60">
+    <div class="max-w-6xl mx-auto px-5 py-20">
+      <div class="max-w-2xl mb-12 reveal">
+        <p class="text-sm font-mono text-amber-400 mb-3">// 稳定性设计</p>
+        <h2 class="text-3xl sm:text-4xl font-bold text-slate-50">踩坑换来的防线，成熟库兜底</h2>
+        <p class="mt-4 text-slate-400 leading-relaxed">
+          每一层防一种失效，核心机制用千万级周下载的成熟库实现，不手写。
+        </p>
+      </div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+
+        <div class="reveal card-hover bg-slate-900/60 border border-slate-800 rounded-2xl p-5">
+          <div class="flex items-center gap-2.5 mb-2">
+            <i class="fa-solid fa-file-shield text-indigo-400"></i>
+            <h3 class="font-semibold text-slate-100">原子写</h3>
+          </div>
+          <p class="text-sm text-slate-400 leading-relaxed"><code class="font-mono text-xs text-amber-300">write-file-atomic</code> 先写临时文件再 rename，写一半被 kill 不截断。</p>
+        </div>
+
+        <div class="reveal card-hover bg-slate-900/60 border border-slate-800 rounded-2xl p-5">
+          <div class="flex items-center gap-2.5 mb-2">
+            <i class="fa-solid fa-lock text-indigo-400"></i>
+            <h3 class="font-semibold text-slate-100">进程级锁</h3>
+          </div>
+          <p class="text-sm text-slate-400 leading-relaxed"><code class="font-mono text-xs text-amber-300">proper-lockfile</code>，同时只跑一个 watch；进程被杀后锁 60s 自动过期 takeover。</p>
+        </div>
+
+        <div class="reveal card-hover bg-slate-900/60 border border-slate-800 rounded-2xl p-5">
+          <div class="flex items-center gap-2.5 mb-2">
+            <i class="fa-solid fa-ghost text-amber-400"></i>
+            <h3 class="font-semibold text-slate-100">假完成守卫</h3>
+          </div>
+          <p class="text-sm text-slate-400 leading-relaxed">PostToolUse 钩子看真实文件写入，零改动不打勾；连续 3 轮空转标阻塞。</p>
+        </div>
+
+        <div class="reveal card-hover bg-slate-900/60 border border-slate-800 rounded-2xl p-5">
+          <div class="flex items-center gap-2.5 mb-2">
+            <i class="fa-solid fa-heart-pulse text-rose-400"></i>
+            <h3 class="font-semibold text-slate-100">ctx 健康度探针</h3>
+          </div>
+          <p class="text-sm text-slate-400 leading-relaxed">每轮测窗口占用，超 70% 先发 <code class="font-mono text-xs text-amber-300">/compact deep</code> 压一轮，压不下再弃会话重开。</p>
+        </div>
+
+        <div class="reveal card-hover bg-slate-900/60 border border-slate-800 rounded-2xl p-5">
+          <div class="flex items-center gap-2.5 mb-2">
+            <i class="fa-solid fa-triangle-exclamation text-amber-400"></i>
+            <h3 class="font-semibold text-slate-100">崩溃检测</h3>
+          </div>
+          <p class="text-sm text-slate-400 leading-relaxed">tick_started 与 tick_completed 配对，发现未完成的崩溃 tick，下轮从断点续跑。</p>
+        </div>
+
+        <div class="reveal card-hover bg-slate-900/60 border border-slate-800 rounded-2xl p-5">
+          <div class="flex items-center gap-2.5 mb-2">
+            <i class="fa-solid fa-rotate text-sky-400"></i>
+            <h3 class="font-semibold text-slate-100">日志轮转 + 心跳</h3>
+          </div>
+          <p class="text-sm text-slate-400 leading-relaxed">events 超 5000 行归档（丢明细不丢计数）；30s 心跳落盘，外部据此判 watch 卡死。</p>
+        </div>
+      </div>
+
+      <!-- 爆了才拆 highlight -->
+      <div class="reveal mt-6 relative overflow-hidden rounded-2xl border border-rose-500/30 bg-gradient-to-br from-rose-950/40 via-slate-900/60 to-slate-900/60 p-7">
+        <div class="flex flex-col md:flex-row md:items-center gap-6">
+          <div class="w-14 h-14 rounded-2xl bg-rose-500/15 border border-rose-500/40 flex items-center justify-center shrink-0">
+            <i class="fa-solid fa-bomb text-rose-400 text-xl"></i>
+          </div>
+          <div class="flex-1">
+            <div class="flex items-center gap-2 mb-1.5">
+              <h3 class="text-lg font-bold text-slate-50">死信队列 + lazy 拆：爆了才拆</h3>
+              <span class="text-[10px] font-mono text-rose-300 bg-rose-500/15 border border-rose-500/30 rounded-full px-2 py-0.5">反馈驱动</span>
+            </div>
+            <p class="text-sm text-slate-400 leading-relaxed">
+              拆到多细才不爆，只有跑到那里才知道。任务真撑爆上下文 → 入死信队列 → <code class="font-mono text-amber-300">splitTask</code> 拆成可单独完成的子项回插继续推进。
+              不预先递归猜深度，两道计数兜底（<code class="font-mono text-xs text-amber-300">failed_tasks≥5</code> 横向 / <code class="font-mono text-xs text-amber-300">dlq_split_count≥30</code> 纵向）防死循环。
+            </p>
+          </div>
+          <a href="https://github.com/free-wyq/swallow/blob/main/docs/dead-letter-design.md" target="_blank" rel="noopener"
+             class="shrink-0 text-sm text-rose-300 hover:text-rose-200 border border-rose-500/40 hover:border-rose-400 rounded-lg px-3 py-2 transition">
+            设计文档 <i class="fa-solid fa-arrow-up-right-from-square text-[10px] ml-1"></i>
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== ARCHITECTURE ===================== -->
+  <section id="architecture" class="border-t border-slate-800/60 bg-slate-900/30">
+    <div class="max-w-6xl mx-auto px-5 py-20">
+      <div class="max-w-2xl mb-10 reveal">
+        <p class="text-sm font-mono text-sky-400 mb-3">// 架构</p>
+        <h2 class="text-3xl sm:text-4xl font-bold text-slate-50">推进 + 结构化落盘 + 外部发战报</h2>
+        <p class="mt-4 text-slate-400 leading-relaxed">
+          四个边界一图看清：主机配置（密钥）/ 目标项目（产物 + git）/ 脚本（orchestrator）/ 外部 agent（拉起 + 发战报）。
+          想看可交互的动态版，打开<a href="architecture-demo.html" target="_blank" rel="noopener" class="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">动态架构演练页</a>。
+        </p>
+      </div>
+      <div class="reveal bg-slate-950/60 border border-slate-800 rounded-2xl p-5 sm:p-8 overflow-x-auto">
+        <pre class="mermaid">
+flowchart TB
+    subgraph HOST["⚙️ 主机配置 · Linux/macOS"]
+      ENV[("swallow.env<br/>密钥 + 代理/模型")]
+    end
+    subgraph PROJ["📁 目标项目 --cwd · 产物 + git commit"]
+      KNOW[("CLAUDE.md 基线 + .claude/memory")]
+      TASK[(".task.md · 进度真相源")]
+      STATE[("state.json · 恢复点 原子写")]
+      EVENTS[("events.jsonl append-only")]
+    end
+    subgraph SCRIPT["🛠️ swallow --watch 长进程"]
+      BOOT["bootstrap 拆任务"]
+      TICK["tick 幂等单步 while 循环"]
+      RUN["runOneTask 执行"]
+      SPLIT["splitTask 拆子项 爆才调"]
+      DLQ[("state.dead_letter 死信队列")]
+      BOOT --> TICK --> RUN
+      RUN -->|"ctx_overflow 达限"| DLQ
+      BOOT -->|"爆/截断"| DLQ
+      DLQ --> SPLIT -->|"子项回插"| TICK
+    end
+    subgraph EXT["📡 外部 agent / 用户"]
+      User([拉起 --watch])
+      Ext([定时读结果])
+      Push([自行发战报])
+    end
+    User --> BOOT
+    KNOW --> BOOT
+    ENV -.-> BOOT
+    BOOT --> TASK
+    TICK --> STATE
+    TICK --> EVENTS
+    TICK -->|"打勾"| TASK
+    Ext --> STATE
+    Ext -.-> Push
+        </pre>
+      </div>
+      <div class="reveal mt-6 grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+        <div class="bg-amber-950/20 border border-amber-500/30 rounded-xl p-4">
+          <p class="text-amber-400 font-semibold text-xs mb-1"><i class="fa-solid fa-server mr-1"></i>主机配置</p>
+          <p class="text-slate-400 text-xs leading-relaxed">~/.config/swallow/swallow.env 存密钥/代理/模型，不属项目也不属脚本。</p>
+        </div>
+        <div class="bg-emerald-950/20 border border-emerald-500/30 rounded-xl p-4">
+          <p class="text-emerald-400 font-semibold text-xs mb-1"><i class="fa-solid fa-folder mr-1"></i>目标项目</p>
+          <p class="text-slate-400 text-xs leading-relaxed">--cwd 指向，全部产物落这里并 git commit 进它仓库。</p>
+        </div>
+        <div class="bg-orange-950/20 border border-orange-500/30 rounded-xl p-4">
+          <p class="text-orange-400 font-semibold text-xs mb-1"><i class="fa-solid fa-screwdriver-wrench mr-1"></i>脚本</p>
+          <p class="text-slate-400 text-xs leading-relaxed">orchestrator 本体，bootstrap 拆 + tick 执行两个独立 query()。</p>
+        </div>
+        <div class="bg-sky-950/20 border border-sky-500/30 rounded-xl p-4">
+          <p class="text-sky-400 font-semibold text-xs mb-1"><i class="fa-solid fa-tower-broadcast mr-1"></i>外部 agent</p>
+          <p class="text-slate-400 text-xs leading-relaxed">脚本之外，拉起 watch + 定时读结果发战报，与脚本互不依赖。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== QUICK START ===================== -->
+  <section id="start" class="border-t border-slate-800/60">
+    <div class="max-w-6xl mx-auto px-5 py-20">
+      <div class="max-w-2xl mb-10 reveal">
+        <p class="text-sm font-mono text-emerald-400 mb-3">// 快速开始</p>
+        <h2 class="text-3xl sm:text-4xl font-bold text-slate-50">三步跑起来</h2>
+        <p class="mt-4 text-slate-400 leading-relaxed">
+          swallow 是纯 agent 化的——git clone + 注册 skill 即用。唯一前提 <strong class="text-slate-200">Node 18+</strong>，
+          claude 引擎随 SDK 打包，<strong class="text-slate-200">无需另装 Claude Code</strong>。
+          完整步骤（给 AI 助手读）见 <a href="https://github.com/free-wyq/swallow/blob/main/install.md" target="_blank" rel="noopener" class="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">install.md</a>。
+        </p>
+      </div>
+
+      <div class="space-y-4">
+        <div class="reveal flex flex-col sm:flex-row gap-4 bg-slate-900/60 border border-slate-800 rounded-2xl p-5">
+          <div class="flex sm:flex-col items-center gap-3 sm:w-24">
+            <span class="w-9 h-9 rounded-lg bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center font-mono font-bold text-indigo-400">1</span>
+            <span class="text-sm text-slate-400 sm:text-center">克隆代码</span>
+          </div>
+          <pre class="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-4 text-xs overflow-x-auto"><code>git clone --depth 1 https://github.com/free-wyq/swallow.git ~/.local/share/swallow</code></pre>
+        </div>
+        <div class="reveal flex flex-col sm:flex-row gap-4 bg-slate-900/60 border border-slate-800 rounded-2xl p-5">
+          <div class="flex sm:flex-col items-center gap-3 sm:w-24">
+            <span class="w-9 h-9 rounded-lg bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center font-mono font-bold text-indigo-400">2</span>
+            <span class="text-sm text-slate-400 sm:text-center">注册 skill + 配密钥</span>
+          </div>
+          <pre class="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-4 text-xs overflow-x-auto"><code>mkdir -p ~/.config/swallow
+cp ~/.local/share/swallow/swallow.env.example ~/.config/swallow/swallow.env
+chmod 600 ~/.config/swallow/swallow.env   # 编辑填 ANTHROPIC_API_KEY=sk-...</code></pre>
+        </div>
+        <div class="reveal flex flex-col sm:flex-row gap-4 bg-slate-900/60 border border-slate-800 rounded-2xl p-5">
+          <div class="flex sm:flex-col items-center gap-3 sm:w-24">
+            <span class="w-9 h-9 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center font-mono font-bold text-emerald-400">3</span>
+            <span class="text-sm text-slate-400 sm:text-center">跑</span>
+          </div>
+          <pre class="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-4 text-xs overflow-x-auto"><code>bash ~/.local/share/swallow/skill/run.sh --cwd /path/to/project "构建一个 Go REST API"</code></pre>
+        </div>
+      </div>
+
+      <div class="reveal mt-8 grid sm:grid-cols-3 gap-3 text-sm">
+        <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-4">
+          <p class="text-slate-400 text-xs mb-1"><i class="fa-solid fa-eye mr-1 text-slate-500"></i>看状态</p>
+          <code class="font-mono text-xs text-amber-300">run.sh --cwd &lt;proj&gt; --status --json</code>
+        </div>
+        <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-4">
+          <p class="text-slate-400 text-xs mb-1"><i class="fa-solid fa-stop mr-1 text-slate-500"></i>停</p>
+          <code class="font-mono text-xs text-amber-300">run.sh --cwd &lt;proj&gt; --stop</code>
+        </div>
+        <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-4">
+          <p class="text-slate-400 text-xs mb-1"><i class="fa-solid fa-play mr-1 text-slate-500"></i>恢复</p>
+          <code class="font-mono text-xs text-amber-300">run.sh --cwd &lt;proj&gt; --resume</code>
+        </div>
+      </div>
+      <p class="reveal mt-6 text-xs text-slate-500 leading-relaxed">
+        ⚠️ <strong class="text-slate-400">别在 swallow 仓库根目录裸跑</strong>——会把产物写进 swallow 仓库并 commit 它。用 <code class="font-mono text-amber-300">--cwd</code> 指向你的目标项目。
+      </p>
+    </div>
+  </section>
+
+  <!-- ===================== USE CASES ===================== -->
+  <section id="usecases" class="border-t border-slate-800/60 bg-slate-900/30">
+    <div class="max-w-6xl mx-auto px-5 py-20">
+      <div class="max-w-2xl mb-12 reveal">
+        <p class="text-sm font-mono text-amber-400 mb-3">// 适用场景</p>
+        <h2 class="text-3xl sm:text-4xl font-bold text-slate-50">什么活儿适合交给它</h2>
+      </div>
+      <div class="grid md:grid-cols-3 gap-5">
+        <div class="reveal card-hover bg-emerald-950/20 border border-emerald-500/30 rounded-2xl p-6">
+          <i class="fa-solid fa-circle-check text-emerald-400 text-xl mb-3"></i>
+          <h3 class="font-semibold text-slate-100 mb-3">推荐</h3>
+          <ul class="space-y-2.5 text-sm text-slate-400">
+            <li class="flex gap-2"><i class="fa-solid fa-wrench text-emerald-400/70 text-xs mt-1"></i><span>技术债批量修复（lint / 类型 / 重构）</span></li>
+            <li class="flex gap-2"><i class="fa-solid fa-wrench text-emerald-400/70 text-xs mt-1"></i><span>方案已知的功能开发，开发者定方案、AI 执行</span></li>
+            <li class="flex gap-2"><i class="fa-solid fa-wrench text-emerald-400/70 text-xs mt-1"></i><span>24h 无人值守构建，睡前启动、醒来验证</span></li>
+          </ul>
+        </div>
+        <div class="reveal card-hover bg-amber-950/20 border border-amber-500/30 rounded-2xl p-6">
+          <i class="fa-solid fa-triangle-exclamation text-amber-400 text-xl mb-3"></i>
+          <h3 class="font-semibold text-slate-100 mb-3">谨慎使用</h3>
+          <ul class="space-y-2.5 text-sm text-slate-400">
+            <li class="flex gap-2"><i class="fa-solid fa-wrench text-amber-400/70 text-xs mt-1"></i><span>高风险重构——建议先在非关键分支验证</span></li>
+          </ul>
+          <p class="mt-4 text-xs text-slate-500 leading-relaxed">建议先在非关键分支跑几轮验证，再放到主力流程。</p>
+        </div>
+        <div class="reveal card-hover bg-rose-950/20 border border-rose-500/30 rounded-2xl p-6">
+          <i class="fa-solid fa-circle-xmark text-rose-400 text-xl mb-3"></i>
+          <h3 class="font-semibold text-slate-100 mb-3">不推荐</h3>
+          <ul class="space-y-2.5 text-sm text-slate-400">
+            <li class="flex gap-2"><i class="fa-solid fa-wrench text-rose-400/70 text-xs mt-1"></i><span>探索性设计——需要开发者持续决策与反馈</span></li>
+          </ul>
+          <p class="mt-4 text-xs text-slate-500 leading-relaxed">无人值守的前提是方向已定，方向还在探索时更适合交互式会话。</p>
+        </div>
+      </div>
+      <div class="reveal mt-8 bg-slate-950/60 border border-slate-800 rounded-2xl p-5 text-sm text-slate-400 leading-relaxed">
+        <i class="fa-solid fa-lightbulb text-amber-400 mr-2"></i>
+        使用前确保项目里有 <code class="font-mono text-xs text-amber-300">CLAUDE.md</code>（swallow 代码直接读它当 bootstrap 基线）和 <code class="font-mono text-xs text-amber-300">.claude/memory/</code>（引擎自动注入跨会话记忆）知识沉淀——这两者直接影响任务拆解的准确性和效率。
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== FAQ ===================== -->
+  <section id="faq" class="border-t border-slate-800/60">
+    <div class="max-w-3xl mx-auto px-5 py-20">
+      <div class="mb-12 reveal">
+        <p class="text-sm font-mono text-indigo-400 mb-3">// 预设问答</p>
+        <h2 class="text-3xl sm:text-4xl font-bold text-slate-50">常见疑问</h2>
+      </div>
+      <div class="space-y-3">
+
+        <details class="reveal group bg-slate-900/60 border border-slate-800 rounded-2xl p-5 open:border-indigo-500/40">
+          <summary class="flex items-center justify-between cursor-pointer font-semibold text-slate-100 list-none">
+            swallow 和 Claude Code 什么关系？
+            <i class="fa-solid fa-plus text-slate-500 group-open:rotate-45 transition"></i>
+          </summary>
+          <p class="mt-3 text-sm text-slate-400 leading-relaxed">
+            Claude Code 是交互式助手，你在旁边盯着、随时反馈。swallow 是批处理引擎，给个目标就不管了，自己拆任务、自己执行、崩了自己恢复。两者互补——前者适合探索，后者适合无人值守。事实上 swallow 就是用 Claude Agent SDK（Claude Code 的底层引擎）驱动的。
+          </p>
+        </details>
+
+        <details class="reveal group bg-slate-900/60 border border-slate-800 rounded-2xl p-5 open:border-indigo-500/40">
+          <summary class="flex items-center justify-between cursor-pointer font-semibold text-slate-100 list-none">
+            怎么控制成本？
+            <i class="fa-solid fa-plus text-slate-500 group-open:rotate-45 transition"></i>
+          </summary>
+          <p class="mt-3 text-sm text-slate-400 leading-relaxed">
+            时间比 token 贵。swallow 默认不限 token / 不限轮数（token 不限量场景下轮数护栏纯属挡路），真正要避免的是在拆不掉的任务上持续浪费——死信队列的计数兜底（<code class="font-mono text-xs text-amber-300">failed_tasks≥5</code> / <code class="font-mono text-xs text-amber-300">dlq_split_count≥30</code>）比 token 硬限制更有效。行为护栏仍留正数防死循环。
+          </p>
+        </details>
+
+        <details class="reveal group bg-slate-900/60 border border-slate-800 rounded-2xl p-5 open:border-indigo-500/40">
+          <summary class="flex items-center justify-between cursor-pointer font-semibold text-slate-100 list-none">
+            怎么拿运行报告？它发消息吗？
+            <i class="fa-solid fa-plus text-slate-500 group-open:rotate-45 transition"></i>
+          </summary>
+          <p class="mt-3 text-sm text-slate-400 leading-relaxed">
+            orchestrator <strong class="text-slate-200">不发消息</strong>。每轮把进度/状态结构化写进 state.json + events.jsonl + .task.md，外部程序通过 <code class="font-mono text-xs text-amber-300">--status --json</code> 读结果，想发企微/钉钉/邮件都行。文案、频道、频率全由你定。接入实战见 hermes-guide / claude-code-guide。
+          </p>
+        </details>
+
+        <details class="reveal group bg-slate-900/60 border border-slate-800 rounded-2xl p-5 open:border-indigo-500/40">
+          <summary class="flex items-center justify-between cursor-pointer font-semibold text-slate-100 list-none">
+            支持其他模型吗？
+            <i class="fa-solid fa-plus text-slate-500 group-open:rotate-45 transition"></i>
+          </summary>
+          <p class="mt-3 text-sm text-slate-400 leading-relaxed">
+            API 层能换——走代理/中转填 <code class="font-mono text-xs text-amber-300">ANTHROPIC_BASE_URL</code> 和 <code class="font-mono text-xs text-amber-300">ANTHROPIC_MODEL</code> 即可（e2e 就是用 GLM 代理真跑的）。但 <code class="font-mono text-xs text-amber-300">/compact</code> 等上下文管理机制需要目标模型支持，代理模型上下文有限时靠 ctx 健康度探针运行时实测兜底。
+          </p>
+        </details>
+
+        <details class="reveal group bg-slate-900/60 border border-slate-800 rounded-2xl p-5 open:border-indigo-500/40">
+          <summary class="flex items-center justify-between cursor-pointer font-semibold text-slate-100 list-none">
+            生产能用吗？
+            <i class="fa-solid fa-plus text-slate-500 group-open:rotate-45 transition"></i>
+          </summary>
+          <p class="mt-3 text-sm text-slate-400 leading-relaxed">
+            Apache-2.0 协议，e2e 全绿（happy path / 崩溃恢复 / 并发锁 / 停止哨兵 / 假完成守卫 / 死信队列）。核心依赖是千万级周下载的成熟库（write-file-atomic、proper-lockfile）。建议先在非关键分支跑几轮验证再放到主力流程。
+          </p>
+        </details>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== CTA FOOTER ===================== -->
+  <footer class="border-t border-slate-800/60 hero-glow relative overflow-hidden">
+    <div class="absolute inset-0 bg-tech-grid pointer-events-none opacity-50"></div>
+    <div class="relative max-w-6xl mx-auto px-5 py-16 text-center">
+      <h2 class="text-2xl sm:text-3xl font-bold text-slate-50 mb-3">睡前启动，醒来验证</h2>
+      <p class="text-slate-400 mb-7 max-w-xl mx-auto">给 swallow 一个目标，剩下的交给它。崩了它自己爬起来接着跑。</p>
+      <div class="flex flex-wrap items-center justify-center gap-3">
+        <a href="architecture-demo.html" target="_blank" rel="noopener"
+           class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-5 py-2.5 rounded-xl transition">
+          <i class="fa-solid fa-play"></i> 动态演练
+        </a>
+        <a href="https://github.com/free-wyq/swallow" target="_blank" rel="noopener"
+           class="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 font-semibold px-5 py-2.5 rounded-xl transition">
+          <i class="fa-brands fa-github"></i> 查看源码
+        </a>
+      </div>
+      <div class="mt-12 pt-8 border-t border-slate-800/60 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-md bg-gradient-to-tr from-amber-500 via-indigo-500 to-emerald-400 p-[2px]">
+            <span class="w-full h-full bg-slate-950 rounded-[3px] flex items-center justify-center">
+              <i class="fa-solid fa-bolt text-amber-400 text-[8px]"></i>
+            </span>
+          </span>
+          <span class="font-mono">swallow · Apache-2.0</span>
+        </div>
+        <div class="flex items-center gap-5">
+          <a href="https://github.com/free-wyq/swallow" target="_blank" rel="noopener" class="hover:text-slate-300 transition">GitHub</a>
+          <a href="https://github.com/free-wyq/swallow/blob/main/README.md" target="_blank" rel="noopener" class="hover:text-slate-300 transition">README</a>
+          <a href="https://github.com/free-wyq/swallow/blob/main/install.md" target="_blank" rel="noopener" class="hover:text-slate-300 transition">install.md</a>
+          <a href="https://deepwiki.com/free-wyq/swallow" target="_blank" rel="noopener" class="hover:text-slate-300 transition">DeepWiki</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // mermaid dark
+    mermaid.initialize({ startOnLoad: true, theme: 'dark', securityLevel: 'loose',
+      themeVariables: {
+        darkMode: true, background: '#020617',
+        primaryColor: '#1e293b', primaryTextColor: '#e2e8f0', primaryBorderColor: '#4f46e5',
+        lineColor: '#64748b', secondaryColor: '#0f172a', tertiaryColor: '#0f172a',
+        clusterBkg: 'rgba(30,41,59,0.4)', clusterBorder: '#334155',
+        edgeLabelBackground: '#0f172a', fontFamily: 'Inter, sans-serif'
+      }
+    });
+
+    // scroll reveal
+    const io = new IntersectionObserver((es) => {
+      es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+    }, { threshold: 0.12 });
+    document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+  </script>
+</body>
+</html>
