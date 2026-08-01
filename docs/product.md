@@ -64,59 +64,70 @@ swallow 的目标：**给一个目标，系统自己拆任务、自己执行、�
 四个边界一图看清：主机配置（密钥）/ 目标项目（产物 + git）/ 脚本（orchestrator）/ 外部 agent（拉起 + 发战报）。
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{
-  'fontFamily':'Inter, ui-sans-serif, system-ui','fontSize':'14px',
-  'background':'#0b1020',
-  'primaryColor':'#1e1b4b','primaryTextColor':'#e0e7ff','primaryBorderColor':'#6366f1',
-  'lineColor':'#818cf8','secondaryColor':'#0f172a','tertiaryColor':'#0a0f1f',
-  'clusterBkg':'rgba(30,27,59,0.55)','clusterBorder':'#4f46e5',
-  'edgeLabelBackground':'#0b1020'
-}}}%%
 flowchart TB
-    subgraph HOST["⚙️ 主机配置 · Linux/macOS"]
-      ENV[["🔑 swallow.env<br/>密钥 + 代理/模型"]]
+    subgraph HOST["⚙️ 主机配置 · Linux/macOS（~/.config/）"]
+      ENV[("swallow.env<br/>密钥 + 代理/模型")]
     end
-    subgraph PROJ["📁 目标项目 --cwd · 产物 + git commit"]
-      KNOW[["📚 CLAUDE.md 基线<br/>+ .claude/memory"]]
-      TASK[["📝 .task.md<br/>进度真相源"]]
-      STATE[["💾 state.json<br/>恢复点 · 原子写"]]
-      EVENTS[["📜 events.jsonl<br/>append-only 审计"]]
+
+    subgraph PROJ["📁 目标项目（--cwd 指向）· 产物写入处 + git commit 仓库"]
+      direction TB
+      KNOW[("CLAUDE.md 基线<br/>+ .claude/memory 引擎注入")]
+      TASK[(".task.md · 进度真相源")]
+      STATE[("state.json · 恢复点<br/>原子写")]
+      EVENTS[("events.jsonl<br/>append-only 审计")]
     end
-    subgraph SCRIPT["🛠️ swallow --watch 长进程"]
-      BOOT["🔧 bootstrap 拆任务"]
-      TICK["🔁 tick 幂等单步"]
-      RUN["⚙️ runOneTask 执行"]
-      SPLIT["✂️ splitTask 爆才调"]
-      DLQ[["☠️ state.dead_letter<br/>死信队列 lazy 拆"]]
-      BOOT ==> TICK ==> RUN
-      RUN -. "ctx_overflow 达限" .-> DLQ
-      BOOT -. "爆/截断" .-> DLQ
-      DLQ ==> SPLIT -. "子项回插" .-> TICK
+
+    subgraph SCRIPT["🛠️ swallow orchestrator（脚本）· --watch 长进程"]
+      direction TB
+      BOOT["bootstrap 拆任务 · query()"]
+      TICK["tick 幂等单步 · while 循环"]
+      RUN["runOneTask · query()"]
+      SPLIT["splitTask 拆子项 · query()（爆才调）"]
+      DLQ[("state.dead_letter<br/>死信队列 lazy 拆")]
+      SDK["claude-agent-sdk（npm 包）"]
+      CLI["claude 引擎（随 SDK 打包）"]
+      BOOT --> TICK
+      TICK -->|"读首个未完成"| RUN
+      RUN --> SDK
+      SDK -->|"spawn 子进程"| CLI
+      CLI -.->|"PostToolUse 回调"| RUN
+      RUN -->|"ctx_overflow 达限"| DLQ
+      BOOT -->|"爆/截断"| DLQ
+      DLQ --> SPLIT
+      SPLIT -->|"子 task 插回 / 子 goal 独立 bootstrap"| TICK
     end
-    subgraph EXT["📡 外部 agent / 用户"]
-      User(["🚀 拉起 --watch"])
-      Ext(["👁️ 定时读结果"])
-      Push(["📤 自行发战报"])
+
+    subgraph EXTBOX["📡 外部 agent / 用户（脚本之外）"]
+      direction LR
+      Ext([定时读结果])
+      Push([自行组织发战报])
+      User([拉起 --watch])
     end
-    User ==> BOOT
-    KNOW ==> BOOT
-    ENV -. "密钥/模型" .-> BOOT
-    BOOT --> TASK
-    TICK --> STATE
+
+    User -->|"拉起"| BOOT
+    KNOW -->|"loadProjectKnowledge 读 CLAUDE.md 喂基线（.claude/memory 由引擎 query 注入，swallow 不喂）"| BOOT
+    ENV -.->|"密钥/代理/模型"| BOOT
+    BOOT -->|"写出"| TASK
+    ENV -.->|"密钥/模型"| RUN
+    TICK -->|"原子写状态"| STATE
     TICK --> EVENTS
-    TICK -. "打勾 [x]/[~]" .-> TASK
-    Ext --> STATE
+    TICK -->|"打勾 [x]/[~]"| TASK
+    Ext -->|"读已落盘结果"| STATE
     Ext -.-> Push
-    classDef indigo fill:#1e1b4b,stroke:#6366f1,stroke-width:2px,color:#e0e7ff;
-    classDef amber fill:#451a03,stroke:#f59e0b,stroke-width:2px,color:#fde68a;
-    classDef emerald fill:#022c22,stroke:#10b981,stroke-width:2px,color:#a7f3d0;
-    classDef rose fill:#4c0519,stroke:#f43f5e,stroke-width:2px,color:#fda4af;
-    classDef sky fill:#082f49,stroke:#0ea5e9,stroke-width:2px,color:#bae6fd;
-    class BOOT,TICK,RUN indigo;
-    class KNOW,TASK,STATE,EVENTS emerald;
-    class ENV amber;
-    class DLQ,SPLIT rose;
-    class User,Ext,Push sky;
+
+    style HOST fill:#fff9c4,stroke:#f9a825,stroke-width:2px
+    style PROJ fill:#f1f8e9,stroke:#2e7d32,stroke-width:2px
+    style SCRIPT fill:#fff8e1,stroke:#e65100,stroke-width:2px
+    style EXTBOX fill:#e8f4fd,stroke:#1565c0,stroke-width:2px
+    style STATE fill:#c8e6c9
+    style EVENTS fill:#bbdefb
+    style TICK fill:#ffe0b2
+    style SDK fill:#e8f5e9
+    style CLI fill:#ffe0b2
+    style KNOW fill:#e1bee7
+    style ENV fill:#fff59d
+    style DLQ fill:#ffccbc,stroke:#bf360c
+    style SPLIT fill:#ffe0b2
 ```
 
 🎬 想看可交互的动态版？打开 **[动态架构演练页](https://free-wyq.github.io/swallow/architecture-demo.html)**（GitHub Pages 渲染，可触发各种场景看链路）。
