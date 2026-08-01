@@ -94,9 +94,9 @@ flowchart TB
       DLQ ==> SPLIT -. "子项回插" .-> TICK
     end
     subgraph EXT["📡 外部 agent / 用户"]
-      User([["🚀 拉起 --watch"]])
-      Ext([["👁️ 定时读结果"]])
-      Push([["📤 自行发战报"]])
+      User(["🚀 拉起 --watch"])
+      Ext(["👁️ 定时读结果"])
+      Push(["📤 自行发战报"])
     end
     User ==> BOOT
     KNOW ==> BOOT
