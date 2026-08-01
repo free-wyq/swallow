@@ -64,41 +64,59 @@ swallow 的目标：**给一个目标，系统自己拆任务、自己执行、�
 四个边界一图看清：主机配置（密钥）/ 目标项目（产物 + git）/ 脚本（orchestrator）/ 外部 agent（拉起 + 发战报）。
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{
+  'fontFamily':'Inter, ui-sans-serif, system-ui','fontSize':'14px',
+  'background':'#0b1020',
+  'primaryColor':'#1e1b4b','primaryTextColor':'#e0e7ff','primaryBorderColor':'#6366f1',
+  'lineColor':'#818cf8','secondaryColor':'#0f172a','tertiaryColor':'#0a0f1f',
+  'clusterBkg':'rgba(30,27,59,0.55)','clusterBorder':'#4f46e5',
+  'edgeLabelBackground':'#0b1020'
+}}}%%
 flowchart TB
     subgraph HOST["⚙️ 主机配置 · Linux/macOS"]
-      ENV[("swallow.env · 密钥 + 代理/模型")]
+      ENV[["🔑 swallow.env<br/>密钥 + 代理/模型"]]
     end
     subgraph PROJ["📁 目标项目 --cwd · 产物 + git commit"]
-      KNOW[("CLAUDE.md 基线 + .claude/memory")]
-      TASK[(".task.md · 进度真相源")]
-      STATE[("state.json · 恢复点 原子写")]
-      EVENTS[("events.jsonl append-only")]
+      KNOW[["📚 CLAUDE.md 基线<br/>+ .claude/memory"]]
+      TASK[["📝 .task.md<br/>进度真相源"]]
+      STATE[["💾 state.json<br/>恢复点 · 原子写"]]
+      EVENTS[["📜 events.jsonl<br/>append-only 审计"]]
     end
     subgraph SCRIPT["🛠️ swallow --watch 长进程"]
-      BOOT["bootstrap 拆任务"]
-      TICK["tick 幂等单步 while 循环"]
-      RUN["runOneTask 执行"]
-      SPLIT["splitTask 拆子项 爆才调"]
-      DLQ[("state.dead_letter 死信队列")]
-      BOOT --> TICK --> RUN
-      RUN -->|"ctx_overflow 达限"| DLQ
-      BOOT -->|"爆/截断"| DLQ
-      DLQ --> SPLIT -->|"子项回插"| TICK
+      BOOT["🔧 bootstrap 拆任务"]
+      TICK["🔁 tick 幂等单步"]
+      RUN["⚙️ runOneTask 执行"]
+      SPLIT["✂️ splitTask 爆才调"]
+      DLQ[["☠️ state.dead_letter<br/>死信队列 lazy 拆"]]
+      BOOT ==> TICK ==> RUN
+      RUN -. "ctx_overflow 达限" .-> DLQ
+      BOOT -. "爆/截断" .-> DLQ
+      DLQ ==> SPLIT -. "子项回插" .-> TICK
     end
     subgraph EXT["📡 外部 agent / 用户"]
-      User([拉起 --watch])
-      Ext([定时读结果])
-      Push([自行发战报])
+      User([["🚀 拉起 --watch"]])
+      Ext([["👁️ 定时读结果"]])
+      Push([["📤 自行发战报"]])
     end
-    User --> BOOT
-    KNOW --> BOOT
-    ENV -.-> BOOT
+    User ==> BOOT
+    KNOW ==> BOOT
+    ENV -. "密钥/模型" .-> BOOT
     BOOT --> TASK
     TICK --> STATE
     TICK --> EVENTS
-    TICK -->|"打勾"| TASK
+    TICK -. "打勾 [x]/[~]" .-> TASK
     Ext --> STATE
     Ext -.-> Push
+    classDef indigo fill:#1e1b4b,stroke:#6366f1,stroke-width:2px,color:#e0e7ff;
+    classDef amber fill:#451a03,stroke:#f59e0b,stroke-width:2px,color:#fde68a;
+    classDef emerald fill:#022c22,stroke:#10b981,stroke-width:2px,color:#a7f3d0;
+    classDef rose fill:#4c0519,stroke:#f43f5e,stroke-width:2px,color:#fda4af;
+    classDef sky fill:#082f49,stroke:#0ea5e9,stroke-width:2px,color:#bae6fd;
+    class BOOT,TICK,RUN indigo;
+    class KNOW,TASK,STATE,EVENTS emerald;
+    class ENV amber;
+    class DLQ,SPLIT rose;
+    class User,Ext,Push sky;
 ```
 
 🎬 想看可交互的动态版？打开 **[动态架构演练页](https://free-wyq.github.io/swallow/architecture-demo.html)**（GitHub Pages 渲染，可触发各种场景看链路）。
