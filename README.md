@@ -5,6 +5,8 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-swallow-9B59B6.svg)](https://deepwiki.com/free-wyq/swallow)
 
+> 🏠 **[产品首页](https://free-wyq.github.io/swallow/)** —— 一页看懂 swallow 做什么、怎么用（动态落地页，含可交互架构演练）。本 README 是技术细节版。
+
 > 核心理念：**重但稳 + 使用简单**。长跑拆成幂等单步 `tick`，状态双层落盘，进程崩溃天然可恢复；orchestrator 只管推进 + 结果结构化落盘，战报由外部 agent 读结果自行发送。
 
 > 📖 **[DeepWiki 解读](https://deepwiki.com/free-wyq/swallow)** —— 第三方对该仓库的自动解读，可与本 README 互为参照。
