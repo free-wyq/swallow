@@ -91,7 +91,7 @@ const DLQ_SPLIT_LIMIT = 30;                  // splitTask 累计调用达此数 
 const BOOTSTRAP_MAX_TURNS = UNLIMITED;
 // 上下文健康度：上轮 input_tokens 占模型上下文超 CTX_RECYCLE_RATIO → 下轮弃旧会话开新会话
 // （防同一 session 跨 tick 累积到撞墙——代理模型上下文有限，resume 进来的 bulk 历史常直接撑爆）。
-// 超阈值先试 /compact deep 探针压一轮，没降下来再弃会话。0=不启用。
+// 超阈值先试 /compact 探针压一轮，没降下来再弃会话。0=不启用。
 // （窗口大小不写死——运行时由 getContextUsage 实测，非注释里的某个估计值。）
 const CTX_RECYCLE_RATIO = 0.7;
 const WATCH_SLEEP_MS = 5_000;       // --watch tick 间隔
@@ -263,13 +263,14 @@ interface RoundOutcome {
   wroteFiles: string[];    // PostToolUse hook 捕获的文件写入
   toolCalls: number;       // 总工具调用数
   aborted: boolean;
-  postTokens: number | null;  // 压缩后总 token（/compact deep 探针用，普通轮=null）
+  postTokens: number | null;  // 压缩后总 token（/compact 探针用，普通轮=null）
   maxTokens: number | null;   // 模型上下文窗口（runOneTask 首个 tool 间隙 getContextUsage 捕获）
   finalText: string;          // result.result（subtype 守卫后取），结局标记 OUTCOME:* 从这解析
 }
 
-// 上下文探针：ctx 偏重时先发 /compact deep 试压一轮，看能不能把会话压下来。
+// 上下文探针：ctx 偏重时先发 /compact 试压一轮，看能不能把会话压下来。
 // /compact 是本地 slash 命令，headless 下作为 prompt 发出即触发压缩（GLM 代理实测可用）。
+// 不带指令参数（旧版写的 "/compact deep" 已去掉）——走 CLI 默认摘要强度，轻量压缩。
 // 压缩前后大小取 compact_metadata 的 pre_tokens/post_tokens（权威信号，成对同量纲可比）——
 // 不能取 result.usage.input_tokens：/compact 这一轮无 assistant 输出，实测 result.usage.input_tokens=0，会误判压缩后大小为 0。
 // 返回 {pre, post}：两者同源同量纲，caller 直接算压缩量(freed=pre-post)/压缩比(post/pre)。
@@ -277,13 +278,13 @@ interface RoundOutcome {
 // 没出 compact_boundary（/compact 未被识别）或没 post_tokens → 返回 null，caller fallback 弃会话。
 // ⚠️ 这里的 pre/post 都是「单次压缩的成对前后值」—— ≠ /compact 界面显示的 before/after（那个 before 是会话累计流经的 input 总量，
 //   能到 1.44M 量级，量纲不同不可比）。护栏的 state.last_input_tokens 是单轮 input（≤窗口），与 pre 同量纲。
-async function probeCompactDeep(sessionId: string | null): Promise<{ pre: number; post: number } | null> {
+async function probeCompact(sessionId: string | null): Promise<{ pre: number; post: number } | null> {
   if (!sessionId) return null;   // 没会话历史，没东西可压
   let preTokens: number | null = null;
   let postTokens: number | null = null;
   try {
     const q = query({
-      prompt: "/compact deep",
+      prompt: "/compact",
       options: {
         resume: sessionId,
         permissionMode: "bypassPermissions",
@@ -300,7 +301,7 @@ async function probeCompactDeep(sessionId: string | null): Promise<{ pre: number
       }
     }
   } catch (e) {
-    log(`⚠️ /compact deep 探针异常（忽略，fallback 弃会话）: ${(e as Error).message}`);
+    log(`⚠️ /compact 探针异常（忽略，fallback 弃会话）: ${(e as Error).message}`);
     return null;
   }
   if (preTokens === null || postTokens === null) return null;  // 没拿到成对值，fallback
@@ -901,17 +902,17 @@ async function tick(): Promise<TickOutcome> {
 
     // 步骤10: 读 .session_id，session_resumed 事件
     let sessionId = readSessionId();
-    // 上下文健康度：上轮 input_tokens 占比超 CTX_RECYCLE_RATIO → 先试 /compact deep 探针压一轮，
+    // 上下文健康度：上轮 input_tokens 占比超 CTX_RECYCLE_RATIO → 先试 /compact 探针压一轮，
     // 压不下来（仍超阈值）才弃会话开新会话。防同一 session 跨 tick 累积撞墙。
     if (sessionId && state.last_input_tokens !== null && CTX_RECYCLE_RATIO > 0) {
       const max = state.ctx_max_tokens ?? 0;
       if (max > 0 && state.last_input_tokens >= Math.floor(max * CTX_RECYCLE_RATIO)) {
-        log(`🧹 上下文偏重（${state.last_input_tokens}/${max} ≈ ${(state.last_input_tokens / max * 100).toFixed(0)}% ≥ ${CTX_RECYCLE_RATIO}），试 /compact deep 探针压一轮`);
-        const probe = await probeCompactDeep(sessionId);
+        log(`🧹 上下文偏重（${state.last_input_tokens}/${max} ≈ ${(state.last_input_tokens / max * 100).toFixed(0)}% ≥ ${CTX_RECYCLE_RATIO}），试 /compact 探针压一轮`);
+        const probe = await probeCompact(sessionId);
         if (probe !== null && max > 0 && probe.post < Math.floor(max * CTX_RECYCLE_RATIO)) {
           const freed = probe.pre - probe.post;
           const compressRatio = probe.pre > 0 ? +(probe.post / probe.pre).toFixed(3) : null;
-          log(`✅ /compact deep 压成功：${probe.pre} → ${probe.post}（压掉 ${freed}，压缩至 ${compressRatio != null ? (compressRatio * 100).toFixed(1) + "%" : "?"}），保留会话继续 resume`);
+          log(`✅ /compact 压成功：${probe.pre} → ${probe.post}（压掉 ${freed}，压缩至 ${compressRatio != null ? (compressRatio * 100).toFixed(1) + "%" : "?"}），保留会话继续 resume`);
           appendEvent("compact_probe_ok", {
             pre: probe.pre,                          // 压缩前 token（单次压缩的 pre_tokens，同量纲）
             post: probe.post,                         // 压缩后 token
@@ -923,7 +924,7 @@ async function tick(): Promise<TickOutcome> {
           state.last_input_tokens = probe.post;
         } else {
           // 探针没压下来（/compact 未被识别或压完仍超阈值）→ 直接弃旧会话开新会话
-          log(`⚠️ /compact deep 未压到阈值（${probe ? `${probe.post}/${max}` : `null/${max}`}），弃旧会话下轮开新会话`);
+          log(`⚠️ /compact 未压到阈值（${probe ? `${probe.post}/${max}` : `null/${max}`}），弃旧会话下轮开新会话`);
           appendEvent("compact_probe_failed", {
             pre: probe?.pre ?? null,                  // 压缩前 token（探针异常/没出 boundary 时可能 null）
             post: probe?.post ?? null,                // 压缩后 token（可能 null 或仍超阈值）
@@ -1184,7 +1185,7 @@ process.on("SIGINT", handleSignal);
 // （≤2万≈5-6k token）；爆的根因是模型 agentic 读文件探索（无限轮），不是基线本身——喂基线与
 // 禁探索不矛盾。死信项再爆→split_failed→进 failed_tasks。
 // 输出解析照抄 bootstrapTasks：text.split("\n").filter((l) => /^- \[ \]/.test(l))。
-// query options 照 bootstrapTasks 模式：新会话（不 resume，区别于 probeCompactDeep）、
+// query options 照 bootstrapTasks 模式：新会话（不 resume，区别于 probeCompact）、
 // bypassPermissions、disallowedTools 含 EnterPlanMode/ExitPlanMode/AskUserQuestion。
 async function splitTask(content: string): Promise<string[]> {
   log(`🔧 splitTask 拆分（模型自决子项数）：${content.slice(0, 80)}`);
@@ -1474,7 +1475,7 @@ function showStatus(json: boolean) {
   console.log(`loop_count: ${s.loop_count}`);
   if (s.ctx_max_tokens !== null && s.last_input_tokens !== null) {
     const pct = (s.last_input_tokens / s.ctx_max_tokens * 100).toFixed(0);
-    console.log(`上下文: ${s.last_input_tokens}/${s.ctx_max_tokens} tokens（${pct}%，超 ${CTX_RECYCLE_RATIO} 触发 /compact deep 探针）`);
+    console.log(`上下文: ${s.last_input_tokens}/${s.ctx_max_tokens} tokens（${pct}%，超 ${CTX_RECYCLE_RATIO} 触发 /compact 探针）`);
   }
   console.log(`had_any_commit: ${s.had_any_commit}`);
   console.log(`stall_task: ${s.stall_task ?? "(无)"}`);

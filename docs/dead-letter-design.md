@@ -103,7 +103,7 @@ swallow 现有三个 query 调用点，本设计加第四个 `splitTask`：
 |---|---|---|---|---|
 | `bootstrapTasks` | 拆任务 | 否（无 session） | 无 | 已有 |
 | `runOneTask` | 干活 | 是（resume 同会话） | 全 hook | 已有 |
-| `probeCompactDeep` | ctx 探针 | 是（监听 compact_boundary） | 无 | 已有 |
+| `probeCompact` | ctx 探针 | 是（监听 compact_boundary） | 无 | 已有 |
 | **`splitTask`**（新增） | 把爆掉的 task 拆成 N 个子 task（N 模型自决） | 否（新会话） | 无 | **本设计加** |
 
 `splitTask` 输入 task 行文本，输出子 task 行列表：
@@ -120,7 +120,7 @@ async function splitTask(content: string): Promise<string[]> {
 }
 ```
 
-query options 照 `bootstrapTasks` 模式：新会话（不 resume，区别于 probeCompactDeep）、`bypassPermissions`、`disallowedTools: ["EnterPlanMode", "ExitPlanMode", "AskUserQuestion"]`。
+query options 照 `bootstrapTasks` 模式：新会话（不 resume，区别于 probeCompact）、`bypassPermissions`、`disallowedTools: ["EnterPlanMode", "ExitPlanMode", "AskUserQuestion"]`。
 
 ## 6. 处理流程
 

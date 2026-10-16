@@ -47,7 +47,7 @@ swallow 的目标：**给一个目标，系统自己拆任务、自己执行、�
 | 原子写 | `write-file-atomic`（先写临时文件再 rename） | state.json/.task.md 写一半被 kill 截断 |
 | 进程级锁 | `proper-lockfile`（stale 60s 自动 takeover） | 多 watch / 手动与 watch 并发冲突；kill -9 残留锁 |
 | 假完成守卫 | PostToolUse 钩子看真实文件写入，零改动不打勾；连续 3 轮空转标阻塞 | agent 空退/假完成 |
-| ctx 健康度探针 | 每轮测窗口占用，超 70% 先发 `/compact deep`，压不下再弃会话重开 | 跨 tick 累积撞墙 |
+| ctx 健康度探针 | 每轮测窗口占用，超 70% 先发 `/compact`，压不下再弃会话重开 | 跨 tick 累积撞墙 |
 | 崩溃检测 | tick_started 与 tick_completed 配对 | 发现未完成的崩溃 tick |
 | 日志轮转 + 心跳 | events 超 5000 行归档（丢明细不丢计数）；30s 心跳落盘 | append-only 涨到几百 MB；watch 卡死无人告警 |
 

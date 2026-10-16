@@ -38,7 +38,7 @@
 
 ### 3.4 上下文健康度探针
 - `last_input_tokens`(上轮 `usage.input_tokens`)+ `ctx_max_tokens`(`getContextUsage` 实测,GLM 代理报 200000)。
-- 下轮入口占比超 `CTX_RECYCLE_RATIO(0.7)` → 发 `/compact deep` 探针:`compact_probe_ok`/`compact_probe_failed` 事件带 `pre`/`post`/`freed`/`compress_ratio`/`trigger_threshold`/`max_tokens`。
+- 下轮入口占比超 `CTX_RECYCLE_RATIO(0.7)` → 发 `/compact` 探针:`compact_probe_ok`/`compact_probe_failed` 事件带 `pre`/`post`/`freed`/`compress_ratio`/`trigger_threshold`/`max_tokens`。
 - ⚠️ **post 不可作"压缩后真实占用"判据**:post 是本地分词(只算摘要文本),不含 resume 时引擎重载的 system prompt + 工具定义 + 历史结构开销。下轮真实 `usage.input_tokens` 仍涨回 15-20 万。"每轮触发探针"是稳态节律非 bug——会话历史每轮涨,每轮压一次维持可工作状态 = 设计意图。
 
 ### 3.5 watch 存活
@@ -91,7 +91,7 @@
 
 ## 6. 已知盲区(接受,记一笔)
 
-- **探针/splitTask 期间心跳冻结**:`probeCompactDeep` 与死信出队 `splitTask` 都不跑 `runOneTask` → 不触发 onHeartbeat → `last_heartbeat_at` 不更新。与 §3.4 同性质。单轮应远短于 60min,冻结超阈值仍被卡死判定捕获。不为它们起专属心跳(违背简单原则)。
+- **探针/splitTask 期间心跳冻结**:`probeCompact` 与死信出队 `splitTask` 都不跑 `runOneTask` → 不触发 onHeartbeat → `last_heartbeat_at` 不更新。与 §3.4 同性质。单轮应远短于 60min,冻结超阈值仍被卡死判定捕获。不为它们起专属心跳(违背简单原则)。
 - **events 轮转归档最旧事件**:反查死循环靠 grep `task_split` 的 content 链看哪个反复出现,最旧可能进 `events.jsonl.1`(KEEP=1 保留)。死循环通常近 5000 行内可见;需更长回溯先扫当前再扫归档。
 - **两死信兜底终态同名**:`last_termination.reason` 都是 `dead_letter_exhausted`,区分横向/纵向需读事件 data(`failed_count` vs `split_count`)。
 

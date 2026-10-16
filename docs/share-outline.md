@@ -170,7 +170,7 @@ sequenceDiagram
 |---|---|---|
 | bootstrap | 新会话 | 首次拆任务 |
 | runOneTask | resume（续跑） | 常规执行 |
-| probeCompactDeep | 探针会话 | 上下文占比 > 70% |
+| probeCompact | 探针会话 | 上下文占比 > 70% |
 | splitTask | 新会话 | 死信出队拆解 |
 
 用 `resume` 而不是 `continue`：continue 会累积上下文越跑越慢，resume 保持同一会话但靠 compact 回收。
@@ -199,7 +199,7 @@ flowchart LR
 
 **Layer 3 - 假完成守卫：** 模型说"做完了"但 PostToolUse 钩子没捕获到文件写入 → 不打勾（不依赖 git）。连续 3 轮零产出标阻塞，跳下一任务。另有 git 依赖的兜底：有 git 的项目如果全程零 commit，标记疑假完成等人来看；无 git 的项目跳过这个检查（PostToolUse 已兜底）。
 
-**Layer 4 - 上下文探针：** 每轮测窗口使用率，超过 70% 主动发 `/compact deep` 压缩。压缩无效再弃会话重建。
+**Layer 4 - 上下文探针：** 每轮测窗口使用率，超过 70% 主动发 `/compact` 压缩。压缩无效再弃会话重建。
 
 #### 2.2.2 可观测性
 

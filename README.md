@@ -215,7 +215,7 @@ bash <skill目录>/run.sh --cwd /path/to/project "构建一个 Go REST API"
 | 假完成三重校验 | 零改动不打勾 + 连续 3 次空转标阻塞 + 全程零 commit 不退出 | agent 空退/假完成 |
 | ctx-overflow 重试 | 结构化判定（subtype+errors）+ 弃会话重开；ctx_overflow 连续 3 次达限入死信队列待拆，aborted 超时仍标阻塞 | 单会话撑爆 / worker 卡死 |
 | 死信队列 + lazy 拆 | **爆了才拆**（反馈驱动，不预先递归）：tick 爆→入队 `type=task`、bootstrap 爆/截断→入队 `type=goal`，`splitTask` 拆子项回插 `.task.md` / 子 goal 独立 bootstrap；两兜底 `failed_tasks>=5`（横向拆不出累计）/ `dlq_split_count>=30`（纵向死循环）→ watch 停 | 任务太大一次装不下、子任务互相依赖无限拆 |
-| ctx 健康度探针 | 上轮 token 占比超 0.7 先发 `/compact deep` 压一轮（取 `compact_metadata.post_tokens` 判定），压不下来再弃会话 | 跨 tick 累积撞墙，avoid 被动等撑爆 |
+| ctx 健康度探针 | 上轮 token 占比超 0.7 先发 `/compact` 压一轮（取 `compact_metadata.post_tokens` 判定），压不下来再弃会话 | 跨 tick 累积撞墙，avoid 被动等撑爆 |
 | 崩溃检测 | tick_started 与 tick_completed 配对（同 tick_id） | 发现未完成的崩溃 tick |
 | events 轮转 | 超 `EVENTS_ROTATE_LINES`(5000) 行滚动归档 `events.jsonl.1`，累计计数存 `state.event_counts`（丢明细不丢计数） | append-only 长跑涨到几百 MB，读路径变慢/OOM |
 | watch 卡死可观测 | runOneTask 期间节流落盘 `last_heartbeat_at`（`HEARTBEAT_FLUSH_MS`=30s），外部 agent 对比当前时间判卡死 | watch 进程没崩但卡死（代理挂/query 挂死）时无人告警 |
@@ -234,7 +234,7 @@ bash <skill目录>/run.sh --cwd /path/to/project "构建一个 Go REST API"
 
 ## 上下文管理（SDK 自带 + prompt 节流 + 爆了拆）
 
-`autoCompactEnabled` 默认 true：上下文快满自动压成摘要，会话不中断、`session_id` 不变。真撑爆了（query 报 `error_during_execution` 含 context）→ 弃会话重开。另外 orchestrator 有主动 ctx 健康度探针：每轮结束记 `input_tokens` + `getContextUsage` 测窗口，下轮若占比超 `CTX_RECYCLE_RATIO(0.7)` 先发 `/compact deep` 压一轮（取 `compact_boundary.compact_metadata.post_tokens` 判定，压不下来再弃旧会话开新会话）。
+`autoCompactEnabled` 默认 true：上下文快满自动压成摘要，会话不中断、`session_id` 不变。真撑爆了（query 报 `error_during_execution` 含 context）→ 弃会话重开。另外 orchestrator 有主动 ctx 健康度探针：每轮结束记 `input_tokens` + `getContextUsage` 测窗口，下轮若占比超 `CTX_RECYCLE_RATIO(0.7)` 先发 `/compact` 压一轮（取 `compact_boundary.compact_metadata.post_tokens` 判定，压不下来再弃旧会话开新会话）。
 
 **探针/重试都兜不住才拆**：连续 3 次 ctx_overflow 达限 → 任务入死信队列，下 tick `splitTask` 拆成可单独完成的子项回插（反馈驱动深度，不预先递归）。bootstrap 爆/截断同理（goal 入队→拆子 goal 独立 bootstrap）。这是最底层兜底，详见 [docs/dead-letter-design.md](docs/dead-letter-design.md)。
 
@@ -246,13 +246,13 @@ bash <skill目录>/run.sh --cwd /path/to/project "构建一个 Go REST API"
 
 **靠措辞引导而非硬禁文件工具**：CLAUDE.md 当基线喂进来（memory 引擎注入），prompt 明令不许主动探索代码。没硬禁 Read/Grep——太重，万一真要瞄一眼目录会卡死，且 CLAUDE.md 不靠工具读，禁探索不影响基线注入。这是从根上做**预防**，死信兜底是**补救**，两者互补：禁探索把爆的概率压到极低（上下文≈knowledge≤2万截断+goal+输出，离窗口很远），真爆了死信队列接。
 
-⚠️ GLM 等代理模型上下文有限（运行时由 orchestrator 经 `getContextUsage` 实测，不写死）。worker prompt 已加节流铁律：只读与当前任务相关的文件、复用 `.claude/memory/` 已有背景、大文件 Grep 定位再按行 Read。目标项目可放 `.claudeignore` 进一步压扫描范围。orchestrator 这层另加 ctx 健康度探针：上轮 token 占比超阈值先发 `/compact deep` 压一轮，压不下来再弃旧会话开新会话。
+⚠️ GLM 等代理模型上下文有限（运行时由 orchestrator 经 `getContextUsage` 实测，不写死）。worker prompt 已加节流铁律：只读与当前任务相关的文件、复用 `.claude/memory/` 已有背景、大文件 Grep 定位再按行 Read。目标项目可放 `.claudeignore` 进一步压扫描范围。orchestrator 这层另加 ctx 健康度探针：上轮 token 占比超阈值先发 `/compact` 压一轮，压不下来再弃旧会话开新会话。
 
 ---
 
 ## 核心机制
 
-- 进程内 `query()`，结构化结果直出（不再 spawn `claude -p` 子进程 grep stream-json）——四个 query 调用点：`bootstrapTasks`（拆任务）/ `runOneTask`（干活，resume 同会话）/ `probeCompactDeep`（ctx 探针）/ `splitTask`（死信队列拆子项，爆才调）
+- 进程内 `query()`，结构化结果直出（不再 spawn `claude -p` 子进程 grep stream-json）——四个 query 调用点：`bootstrapTasks`（拆任务）/ `runOneTask`（干活，resume 同会话）/ `probeCompact`（ctx 探针）/ `splitTask`（死信队列拆子项，爆才调）
 - `PostToolUse` hook 实时捕获真实文件写入 → 完成判定看真实事件（不靠 `git diff` 猜）
 - `abortController` + `Stop` hook 刷新心跳 → 看门狗事件驱动，不轮询
 - `disallowedTools` 移除 `EnterPlanMode`/`ExitPlanMode`/`AskUserQuestion`（防卡住）
